@@ -8,6 +8,8 @@
   const daysFilter = document.getElementById('days-filter');
   const siteFilterB = document.getElementById('site-filter-b');
   const daysFilterB = document.getElementById('days-filter-b');
+  const siteFilterC = document.getElementById('site-filter-c');
+  const daysFilterC = document.getElementById('days-filter-c');
   const sitesList = document.getElementById('sites-list');
   const modalRoot = document.getElementById('modal-root');
   const addSiteBtn = document.getElementById('add-site-btn');
@@ -60,10 +62,12 @@
     });
     document.getElementById('view-dashboard').classList.toggle('hidden', name !== 'dashboard');
     document.getElementById('view-behavior').classList.toggle('hidden', name !== 'behavior');
+    document.getElementById('view-conversions').classList.toggle('hidden', name !== 'conversions');
     document.getElementById('view-sites').classList.toggle('hidden', name !== 'sites');
     if (name === 'sites') renderSites();
     if (name === 'dashboard') loadDashboard();
     if (name === 'behavior') loadBehavior();
+    if (name === 'conversions') loadConversions();
   }
 
   document.querySelectorAll('.nav button').forEach((btn) => {
@@ -101,21 +105,42 @@
     showLogin();
   });
 
+  function syncFilters(source) {
+    const site = source.value;
+    [siteFilter, siteFilterB, siteFilterC].forEach((el) => {
+      if (el && el !== source) el.value = site;
+    });
+  }
+  function syncDays(source) {
+    const days = source.value;
+    [daysFilter, daysFilterB, daysFilterC].forEach((el) => {
+      if (el && el !== source) el.value = days;
+    });
+  }
+
   siteFilter.addEventListener('change', () => {
-    siteFilterB.value = siteFilter.value;
+    syncFilters(siteFilter);
     loadDashboard();
   });
   daysFilter.addEventListener('change', () => {
-    daysFilterB.value = daysFilter.value;
+    syncDays(daysFilter);
     loadDashboard();
   });
   siteFilterB.addEventListener('change', () => {
-    siteFilter.value = siteFilterB.value;
+    syncFilters(siteFilterB);
     loadBehavior();
   });
   daysFilterB.addEventListener('change', () => {
-    daysFilter.value = daysFilterB.value;
+    syncDays(daysFilterB);
     loadBehavior();
+  });
+  siteFilterC.addEventListener('change', () => {
+    syncFilters(siteFilterC);
+    loadConversions();
+  });
+  daysFilterC.addEventListener('change', () => {
+    syncDays(daysFilterC);
+    loadConversions();
   });
   addSiteBtn.addEventListener('click', () => openSiteModal());
 
@@ -131,11 +156,24 @@
         .join('');
     siteFilter.innerHTML = options;
     siteFilterB.innerHTML = options;
+    siteFilterC.innerHTML = options;
     const next = sites.some((s) => s.id === current) ? current : 'all';
     siteFilter.value = next;
-    siteFilterB.value = siteFilterB.value && (siteFilterB.value === 'all' || sites.some((s) => s.id === siteFilterB.value))
-      ? siteFilterB.value
-      : next;
+    const pick = (el) =>
+      el.value && (el.value === 'all' || sites.some((s) => s.id === el.value)) ? el.value : next;
+    siteFilterB.value = pick(siteFilterB);
+    siteFilterC.value = pick(siteFilterC);
+  }
+
+  function goalLabel(name) {
+    const map = {
+      contact_phone: 'تماس تلفنی',
+      contact_email: 'ایمیل',
+      contact_whatsapp: 'واتساپ',
+      consultation: 'صفحه مشاوره',
+      consultation_cta: 'دکمه مشاوره/تماس',
+    };
+    return map[name] || name || 'هدف';
   }
 
   function faDuration(ms) {
@@ -236,6 +274,12 @@
     document.getElementById('stat-scroll').textContent = overview.avg_scroll == null ? '—' : faPct(overview.avg_scroll);
     document.getElementById('stat-clicks').textContent = faNum(overview.clicks);
     document.getElementById('stat-campaigns').textContent = faNum(overview.campaign_views);
+    document.getElementById('stat-conversions').textContent = faNum(overview.conversions);
+    const sess = Number(overview.sessions) || 0;
+    const converting = Number(overview.converting_sessions) || 0;
+    const cvr = sess > 0 ? Math.round((converting / sess) * 1000) / 10 : 0;
+    document.getElementById('stat-cvr').textContent =
+      sess > 0 ? `نرخ تبدیل نشست: ${faNum(cvr)}٪` : 'تماس / مشاوره / هدف';
 
     const deltaEl = document.getElementById('stat-delta');
     const prev = overview.previous_pageviews || 0;
@@ -550,8 +594,84 @@
       if (!document.getElementById('view-behavior').classList.contains('hidden')) {
         loadBehavior().catch(() => {});
       }
+      if (!document.getElementById('view-conversions').classList.contains('hidden')) {
+        loadConversions().catch(() => {});
+      }
     }
   });
+
+  async function loadConversions() {
+    const site = siteFilterC.value || siteFilter.value || 'all';
+    const days = daysFilterC.value || daysFilter.value || '7';
+    const q = `site=${encodeURIComponent(site)}&days=${encodeURIComponent(days)}`;
+    const errEl = document.getElementById('conversion-error');
+    errEl.textContent = '';
+
+    let data;
+    try {
+      data = await api(`/api/stats/conversions?${q}`);
+    } catch (err) {
+      if (!err || err.message !== 'unauthorized') errEl.textContent = 'بارگذاری گزارش تبدیل ناموفق بود.';
+      return;
+    }
+
+    document.getElementById('conv-total').textContent = faNum(data.conversions);
+    document.getElementById('conv-sessions').textContent = faNum(data.converting_sessions);
+    document.getElementById('conv-all-sessions').textContent = faNum(data.sessions);
+    document.getElementById('conv-cvr').textContent = faPct(data.cvr);
+
+    const chartPoints = (data.series || []).map((row) => ({
+      label: String(row.day).slice(5, 10),
+      y: Number(row.conversions) || 0,
+    }));
+    IACharts.lineChart(document.getElementById('chart-conversions'), chartPoints);
+
+    const goalSlices = (data.goals || []).map((g) => ({
+      label: goalLabel(g.goal),
+      value: Number(g.conversions) || 0,
+    }));
+    IACharts.donutChart(document.getElementById('chart-goals'), goalSlices);
+
+    const campEl = document.getElementById('conv-campaign-table');
+    const campaigns = data.campaigns || [];
+    if (!campaigns.length) {
+      campEl.innerHTML =
+        '<p class="empty">هنوز کمپینی با تبدیل ثبت نشده. لینک یکتانت/UTM بزنید و روی تماس یا مشاوره کلیک کنید.</p>';
+    } else {
+      campEl.innerHTML = `<table class="table wide"><thead><tr>
+        <th>کمپین</th><th>نشست</th><th>تبدیل</th><th>نرخ</th>
+      </tr></thead><tbody>${campaigns
+        .map((row) => {
+          const title = row.campaign || row.source || 'بدون نام';
+          const sub = [row.source, row.medium].filter(Boolean).join(' · ');
+          return `<tr>
+            <td>${escapeHtml(title)}${sub ? `<span class="cell-sub">${escapeHtml(sub)}</span>` : ''}</td>
+            <td>${faNum(row.sessions)}</td>
+            <td>${faNum(row.converting_sessions || row.conversions)}</td>
+            <td>${faPct(row.cvr)}</td>
+          </tr>`;
+        })
+        .join('')}</tbody></table>`;
+    }
+
+    const goalEl = document.getElementById('conv-goal-table');
+    const goals = data.goals || [];
+    if (!goals.length) {
+      goalEl.innerHTML = '<p class="empty">هنوز تبدیلی ثبت نشده.</p>';
+    } else {
+      const max = Math.max(...goals.map((g) => Number(g.conversions) || 0), 1);
+      goalEl.innerHTML = `<table class="table"><thead><tr><th>هدف</th><th>تعداد</th><th>نشست</th></tr></thead><tbody>${goals
+        .map((g) => {
+          const pct = Math.max(8, Math.round((Number(g.conversions) / max) * 100));
+          return `<tr>
+            <td>${escapeHtml(goalLabel(g.goal))}</td>
+            <td><div class="bar-cell"><span>${faNum(g.conversions)}</span><span class="bar" style="width:${pct}%"></span></div></td>
+            <td>${faNum(g.sessions)}</td>
+          </tr>`;
+        })
+        .join('')}</tbody></table>`;
+    }
+  }
 
   init();
 })();

@@ -311,6 +311,13 @@ a {
 
 .stats-follow {
   margin-top: -6px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@media (max-width: 1200px) {
+  .stats-follow {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .stat {
@@ -626,6 +633,7 @@ a {
     justify-content: start;
   }
   .stats-row,
+  .stats-follow,
   .grid-2,
   .grid-3 {
     grid-template-columns: 1fr;

@@ -157,11 +157,23 @@ router.get('/stats/overview', async (req, res) => {
       params
     );
 
+    const conversions = await query(
+      `SELECT COUNT(*)::int AS c,
+              COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
+       FROM events
+       WHERE name = 'conversion'
+         AND created_at >= NOW() - (${daysP} || ' days')::interval
+         ${siteClause}`,
+      params
+    );
+
     res.json({
       days,
       ...r.rows[0],
       events: events.rows[0].c,
       clicks: clicks.rows[0].c,
+      conversions: conversions.rows[0].c,
+      converting_sessions: conversions.rows[0].sessions,
       previous_pageviews: prev.rows[0].pageviews,
     });
   } catch (err) {
@@ -393,6 +405,157 @@ router.get('/stats/events', async (req, res) => {
       params
     );
     res.json({ events: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+function eventProp(field) {
+  return dialect === 'sqlite'
+    ? `COALESCE(json_extract(props, '$.${field}'), '')`
+    : `COALESCE(props->>'${field}', '')`;
+}
+
+router.get('/stats/conversions', async (req, res) => {
+  try {
+    const days = parseRange(req);
+    const siteId = req.query.site || 'all';
+    const limit = Math.min(Number(req.query.limit) || 30, 100);
+    const base = rangeParams(siteId, days);
+    const limited = rangeParams(siteId, days, [limit]);
+    const { siteClause, daysP } = base;
+    const limP = `$${limited.extraStart}`;
+    const where = `created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}`;
+    const goalExpr = eventProp('goal');
+    const sourceExpr = eventProp('source');
+    const mediumExpr = eventProp('medium');
+    const campaignExpr = eventProp('campaign');
+
+    const totals = await query(
+      `SELECT COUNT(*)::int AS conversions,
+              COUNT(DISTINCT NULLIF(session_id, ''))::int AS converting_sessions
+       FROM events
+       WHERE name = 'conversion' AND ${where}`,
+      base.params
+    );
+
+    const sessions = await query(
+      `SELECT COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
+       FROM pageviews
+       WHERE ${where}`,
+      base.params
+    );
+
+    const campaignSessions = await query(
+      `SELECT
+         utm_campaign AS campaign,
+         utm_source AS source,
+         utm_medium AS medium,
+         COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions,
+         COUNT(*)::int AS views
+       FROM pageviews
+       WHERE ${where}
+         AND (utm_source <> '' OR utm_medium <> '' OR utm_campaign <> '')
+       GROUP BY utm_campaign, utm_source, utm_medium
+       ORDER BY sessions DESC
+       LIMIT ${limP}`,
+      limited.params
+    );
+
+    const campaignConversions = await query(
+      `SELECT
+         ${campaignExpr} AS campaign,
+         ${sourceExpr} AS source,
+         ${mediumExpr} AS medium,
+         COUNT(*)::int AS conversions,
+         COUNT(DISTINCT NULLIF(session_id, ''))::int AS converting_sessions
+       FROM events
+       WHERE name = 'conversion' AND ${where}
+       GROUP BY 1, 2, 3
+       ORDER BY conversions DESC
+       LIMIT ${limP}`,
+      limited.params
+    );
+
+    const goals = await query(
+      `SELECT
+         COALESCE(NULLIF(${goalExpr}, ''), 'goal') AS goal,
+         COUNT(*)::int AS conversions,
+         COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
+       FROM events
+       WHERE name = 'conversion' AND ${where}
+       GROUP BY 1
+       ORDER BY conversions DESC
+       LIMIT ${limP}`,
+      limited.params
+    );
+
+    const series = await query(
+      `SELECT date_trunc('day', created_at AT TIME ZONE 'UTC')::date AS day,
+              COUNT(*)::int AS conversions,
+              COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
+       FROM events
+       WHERE name = 'conversion' AND ${where}
+       GROUP BY 1
+       ORDER BY 1 ASC`,
+      base.params
+    );
+
+    const keyOf = (row) =>
+      [row.source || '', row.medium || '', row.campaign || ''].join('\u0001');
+    const convMap = new Map(campaignConversions.rows.map((row) => [keyOf(row), row]));
+    const seen = new Set();
+    const campaigns = [];
+
+    for (const row of campaignSessions.rows) {
+      const k = keyOf(row);
+      seen.add(k);
+      const conv = convMap.get(k) || { conversions: 0, converting_sessions: 0 };
+      const sess = Number(row.sessions) || 0;
+      const converting = Number(conv.converting_sessions) || 0;
+      campaigns.push({
+        source: row.source,
+        medium: row.medium,
+        campaign: row.campaign,
+        views: row.views,
+        sessions: sess,
+        conversions: Number(conv.conversions) || 0,
+        converting_sessions: converting,
+        cvr: sess > 0 ? Math.round((converting / sess) * 1000) / 10 : 0,
+      });
+    }
+    for (const row of campaignConversions.rows) {
+      const k = keyOf(row);
+      if (seen.has(k)) continue;
+      if (!row.source && !row.medium && !row.campaign) continue;
+      const converting = Number(row.converting_sessions) || 0;
+      campaigns.push({
+        source: row.source,
+        medium: row.medium,
+        campaign: row.campaign,
+        views: 0,
+        sessions: 0,
+        conversions: Number(row.conversions) || 0,
+        converting_sessions: converting,
+        cvr: 0,
+      });
+    }
+    campaigns.sort((a, b) => b.conversions - a.conversions || b.sessions - a.sessions);
+
+    const sessionCount = Number(sessions.rows[0]?.sessions) || 0;
+    const convertingSessions = Number(totals.rows[0]?.converting_sessions) || 0;
+
+    res.json({
+      days,
+      conversions: Number(totals.rows[0]?.conversions) || 0,
+      converting_sessions: convertingSessions,
+      sessions: sessionCount,
+      cvr: sessionCount > 0 ? Math.round((convertingSessions / sessionCount) * 1000) / 10 : 0,
+      goals: goals.rows,
+      campaigns,
+      series: series.rows,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'server_error' });

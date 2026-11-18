@@ -217,6 +217,7 @@
       sentMs: -1,
       sentScroll: -1,
       clicks: 0,
+      goals: {},
     };
   }
 
@@ -272,6 +273,59 @@
     return clip(el.innerText || el.textContent, 80);
   }
 
+  function detectGoal(el, hrefFull) {
+    var custom = clip(el.getAttribute('data-ia-goal'), 40);
+    if (custom) return custom;
+    var h = String(hrefFull || '').toLowerCase();
+    if (h.indexOf('tel:') === 0) return 'contact_phone';
+    if (h.indexOf('mailto:') === 0) return 'contact_email';
+    if (
+      h.indexOf('wa.me/') >= 0 ||
+      h.indexOf('api.whatsapp.com') >= 0 ||
+      h.indexOf('whatsapp.com') >= 0 ||
+      h.indexOf('whatsapp:') === 0
+    ) {
+      return 'contact_whatsapp';
+    }
+    var path = '';
+    try {
+      path = new URL(hrefFull || el.href || '', location.href).pathname.toLowerCase();
+    } catch (err) {}
+    if (path.indexOf('/consultation') >= 0 || path.indexOf('/contact') >= 0) return 'consultation';
+    var text = clickLabel(el);
+    if (/مشاوره|تماس\s*با\s*مشاور|درخواست\s*ارزیابی|تماس\s*بگیر|واتساپ|whatsapp/i.test(text)) {
+      return 'consultation_cta';
+    }
+    return '';
+  }
+
+  function trackConversion(goal, props) {
+    if (!goal || isNoisePath()) return;
+    var g = String(goal).slice(0, 40);
+    if (!view.goals) view.goals = {};
+    if (view.goals[g]) return;
+    view.goals[g] = 1;
+    var utm = syncUtm();
+    send(
+      payload({
+        type: 'event',
+        n: 'conversion',
+        auto: 1,
+        props: Object.assign(
+          {
+            goal: g,
+            source: utm.source || '',
+            medium: utm.medium || '',
+            campaign: utm.campaign || '',
+            term: utm.term || '',
+            content: utm.content || '',
+          },
+          props && typeof props === 'object' ? props : {}
+        ),
+      })
+    );
+  }
+
   function onClick(e) {
     if (!view || view.clicks >= MAX_CLICKS || isNoisePath()) return;
     var t = e.target;
@@ -287,16 +341,23 @@
     if (!el || el.closest('[data-ia-ignore]')) return;
 
     var href = '';
+    var hrefFull = '';
     var outbound = 0;
     if (el.href) {
       try {
         var u = new URL(el.href, location.href);
-        href = u.host + u.pathname;
-        if (u.host !== location.host) outbound = 1;
+        hrefFull = u.href;
+        if (u.protocol === 'tel:' || u.protocol === 'mailto:') {
+          href = u.href.slice(0, 300);
+        } else {
+          href = (u.host + u.pathname).slice(0, 300);
+          if (u.host !== location.host) outbound = 1;
+        }
       } catch (err) {}
     }
 
     view.clicks += 1;
+    var label = clickLabel(el);
     send(
       payload({
         type: 'event',
@@ -304,14 +365,23 @@
         auto: 1,
         props: {
           el: (el.tagName || '').toLowerCase().slice(0, 20),
-          text: clickLabel(el),
-          href: href.slice(0, 300),
+          text: label,
+          href: href,
           id: clip(el.id, 80),
           name: clip(el.getAttribute('data-ia'), 80),
           outbound: outbound,
         },
       })
     );
+
+    var goal = detectGoal(el, hrefFull);
+    if (goal) {
+      trackConversion(goal, {
+        text: label,
+        href: href,
+        el: (el.tagName || '').toLowerCase().slice(0, 20),
+      });
+    }
   }
 
   var pushState = history.pushState;
@@ -349,6 +419,7 @@
 
   window.iranAnalytics = {
     track: trackEvent,
+    convert: trackConversion,
     pageview: function () {
       rotate();
     },

@@ -39,6 +39,7 @@
         <nav class="nav">
           <button type="button" data-view="dashboard" class="active">نمای کلی</button>
           <button type="button" data-view="behavior">رفتار و کمپین</button>
+          <button type="button" data-view="conversions">تبدیل و گزارش</button>
           <button type="button" data-view="sites">سایت‌ها</button>
         </nav>
         <div class="side-foot">
@@ -102,6 +103,11 @@
               <p class="stat-label">بازدید کمپین</p>
               <p class="stat-value" id="stat-campaigns">—</p>
               <p class="stat-delta">utm_source یا medium یا campaign</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">تبدیل</p>
+              <p class="stat-value" id="stat-conversions">—</p>
+              <p class="stat-delta" id="stat-cvr">تماس / مشاوره / هدف</p>
             </div>
           </div>
 
@@ -175,6 +181,69 @@
           </div>
         </section>
 
+        <section id="view-conversions" class="hidden">
+          <div class="topbar">
+            <h1>تبدیل و گزارش کمپین</h1>
+            <div class="topbar-actions">
+              <select id="site-filter-c" class="chip-select" aria-label="انتخاب سایت"></select>
+              <select id="days-filter-c" class="chip-select" aria-label="بازه زمانی">
+                <option value="1">۲۴ ساعت</option>
+                <option value="7" selected>۷ روز</option>
+                <option value="14">۱۴ روز</option>
+                <option value="30">۳۰ روز</option>
+                <option value="90">۹۰ روز</option>
+              </select>
+            </div>
+          </div>
+          <p class="panel-note">
+            تبدیل یعنی اقدام مهم: تماس تلفنی، واتساپ، ایمیل، صفحه مشاوره، یا دکمه‌ای با
+            <code dir="ltr">data-ia-goal</code>.
+            نرخ تبدیل = نشست‌های تبدیل‌شده ÷ کل نشست‌های همان منبع.
+          </p>
+          <p class="form-error" id="conversion-error"></p>
+
+          <div class="stats-row">
+            <div class="stat">
+              <p class="stat-label">تبدیل‌ها</p>
+              <p class="stat-value" id="conv-total">—</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">نشست تبدیل‌شده</p>
+              <p class="stat-value" id="conv-sessions">—</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">کل نشست‌ها</p>
+              <p class="stat-value" id="conv-all-sessions">—</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">نرخ تبدیل</p>
+              <p class="stat-value" id="conv-cvr">—</p>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h2>روند تبدیل</h2>
+              <div class="chart-wrap"><canvas id="chart-conversions"></canvas></div>
+            </div>
+            <div class="panel">
+              <h2>نوع هدف</h2>
+              <div class="chart-wrap"><canvas id="chart-goals"></canvas></div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h2>کمپین → تبدیل</h2>
+              <div class="table-wrap" id="conv-campaign-table"></div>
+            </div>
+            <div class="panel">
+              <h2>جزئیات هدف‌ها</h2>
+              <div class="table-wrap" id="conv-goal-table"></div>
+            </div>
+          </div>
+        </section>
+
         <section id="view-sites" class="hidden">
           <div class="topbar">
             <h1>سایت‌ها</h1>
@@ -185,7 +254,10 @@
             </div>
           </div>
           <p class="panel-note">
-            کلیک، اسکرول، زمان فعال و UTM با همان تگ اسکریپت ثبت می‌شود. اگر افزونه کش (مثل LiteSpeed) فایل را روی دامنهٔ خود سایت کپی کرد، یک‌بار کش را پاک کنید. برای اسم دلخواه روی یک دکمه، ویژگی <code dir="ltr">data-ia</code> بگذارید. <code dir="ltr">data-ia-ignore</code> آن عنصر را از کلیک خارج می‌کند.
+            کلیک، اسکرول، زمان فعال، UTM و تبدیل با همان تگ اسکریپت ثبت می‌شود. برای هدف سفارشی روی دکمه:
+            <code dir="ltr">data-ia-goal="lead_form"</code>.
+            تماس تلفنی و واتساپ و صفحه مشاوره به‌صورت خودکار تبدیل حساب می‌شوند.
+            اگر LiteSpeed فایل را کپی کرد، یک‌بار Purge کنید.
           </p>
           <div class="panel">
             <div class="sites-list" id="sites-list"></div>

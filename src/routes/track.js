@@ -110,10 +110,24 @@ function sanitizeProps(name, raw, autoClick) {
     return {
       el: cleanToken(props.el, 20),
       text: cleanToken(props.text, 80),
-      href: cleanHref(props.href),
+      href: cleanHref(props.href) || cleanToken(props.href, 300),
       id: cleanToken(props.id, 80),
       name: cleanToken(props.name, 80),
       outbound: props.outbound === 1 || props.outbound === '1' || props.outbound === true ? 1 : 0,
+    };
+  }
+
+  if (name === 'conversion') {
+    return {
+      goal: cleanToken(props.goal || props.name || 'goal', 40) || 'goal',
+      text: cleanToken(props.text, 80),
+      href: cleanHref(props.href) || cleanToken(props.href, 300),
+      el: cleanToken(props.el, 20),
+      source: cleanToken(props.source, 120),
+      medium: cleanToken(props.medium, 120),
+      campaign: cleanToken(props.campaign, 120),
+      term: cleanToken(props.term, 120),
+      content: cleanToken(props.content, 120),
     };
   }
 
