@@ -1,0 +1,62 @@
+import express from 'express';
+import cookieParser from 'cookie-parser';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { initDb, migrate, ping, dialect, engine } from './lib/db.js';
+import trackRoutes from './routes/track.js';
+import authRoutes from './routes/auth.js';
+import apiRoutes from './routes/api.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const publicDir = join(__dirname, '../public');
+const PORT = Number(process.env.PORT || 3000);
+const TRUST_PROXY = process.env.TRUST_PROXY !== 'false';
+
+async function main() {
+  await initDb();
+  await migrate();
+  console.log(`Database migrated (${dialect}/${engine})`);
+
+  const app = express();
+  if (TRUST_PROXY) app.set('trust proxy', 1);
+
+  app.use(express.json({ limit: '32kb' }));
+  app.use(express.urlencoded({ extended: false, limit: '32kb' }));
+  app.use(cookieParser());
+
+  app.use('/', trackRoutes);
+
+  app.get('/t.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.sendFile(join(publicDir, 't.js'));
+  });
+
+  // Login lives at /auth/*; also alias under /api/* (before the authed API router)
+  // so POST /api/login is not swallowed by requireAuth → {"error":"unauthorized"}.
+  app.use('/auth', authRoutes);
+  app.use('/api', authRoutes);
+  app.use('/api', apiRoutes);
+
+  app.use('/admin', express.static(join(publicDir, 'admin'), { index: 'index.html' }));
+  app.get('/', (_req, res) => res.redirect('/admin/'));
+
+  app.get('/healthz', async (_req, res) => {
+    try {
+      await ping();
+      res.json({ ok: true, dialect, engine });
+    } catch {
+      res.status(503).json({ ok: false });
+    }
+  });
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Iran Analytics listening on :${PORT} (${dialect}/${engine})`);
+  });
+}
+
+main().catch((err) => {
+  console.error('Fatal startup error', err);
+  process.exit(1);
+});

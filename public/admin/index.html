@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ایران آنالیتیکس</title>
+    <link rel="stylesheet" href="./css/panel.css" />
+  </head>
+  <body>
+    <div id="login-view" class="login-shell">
+      <form class="login-panel" id="login-form">
+        <div class="brand-mark">
+          <div class="brand-glyph" aria-hidden="true"></div>
+          <h1 class="brand-name">ایران آنالیتیکس</h1>
+        </div>
+        <p class="brand-tag">آنالیتیکس سبک و خودمیزبان برای سایت‌های ایرانی</p>
+        <div class="field">
+          <label for="username">نام کاربری</label>
+          <input id="username" name="username" autocomplete="username" value="admin" />
+        </div>
+        <div class="field">
+          <label for="password">رمز عبور</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required />
+        </div>
+        <p class="form-error" id="login-error"></p>
+        <button class="btn btn-primary" type="submit">ورود به پنل</button>
+      </form>
+    </div>
+
+    <div id="app-view" class="app-shell hidden">
+      <aside class="side">
+        <div class="brand-mark">
+          <div class="brand-glyph" aria-hidden="true"></div>
+          <div>
+            <p class="brand-name" style="font-size: 1.05rem; margin: 0">ایران آنالیتیکس</p>
+            <p class="brand-tag" style="margin: 0; font-size: 0.78rem">پنل مدیریت</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <button type="button" data-view="dashboard" class="active">نمای کلی</button>
+          <button type="button" data-view="behavior">رفتار و کمپین</button>
+          <button type="button" data-view="sites">سایت‌ها</button>
+        </nav>
+        <div class="side-foot">
+          <button type="button" class="btn btn-ghost" id="logout-btn">خروج</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section id="view-dashboard">
+          <div class="topbar">
+            <h1>نمای کلی ترافیک</h1>
+            <div class="topbar-actions">
+              <select id="site-filter" class="chip-select" aria-label="انتخاب سایت"></select>
+              <select id="days-filter" class="chip-select" aria-label="بازه زمانی">
+                <option value="1">۲۴ ساعت</option>
+                <option value="7" selected>۷ روز</option>
+                <option value="14">۱۴ روز</option>
+                <option value="30">۳۰ روز</option>
+                <option value="90">۹۰ روز</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="stats-row" id="stats-row">
+            <div class="stat">
+              <p class="stat-label">بازدید صفحه</p>
+              <p class="stat-value" id="stat-pageviews">—</p>
+              <p class="stat-delta" id="stat-delta"></p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">نشست‌ها</p>
+              <p class="stat-value" id="stat-sessions">—</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">صفحات یکتا</p>
+              <p class="stat-value" id="stat-pages">—</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">رویدادها</p>
+              <p class="stat-value" id="stat-events">—</p>
+            </div>
+          </div>
+
+          <div class="stats-row stats-follow">
+            <div class="stat">
+              <p class="stat-label">زمان فعال</p>
+              <p class="stat-value" id="stat-time">—</p>
+              <p class="stat-delta">میانگین، فقط وقتی تب دیده می‌شود</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">عمق اسکرول</p>
+              <p class="stat-value" id="stat-scroll">—</p>
+              <p class="stat-delta">میانگین بیشترین نقطهٔ دیده‌شده</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">کلیک‌ها</p>
+              <p class="stat-value" id="stat-clicks">—</p>
+              <p class="stat-delta">لینک و دکمه، بدون متن فرم</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">بازدید کمپین</p>
+              <p class="stat-value" id="stat-campaigns">—</p>
+              <p class="stat-delta">utm_source یا medium یا campaign</p>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h2>روند بازدید</h2>
+              <div class="chart-wrap"><canvas id="chart-series"></canvas></div>
+            </div>
+            <div class="panel">
+              <h2>دستگاه‌ها</h2>
+              <div class="chart-wrap"><canvas id="chart-devices"></canvas></div>
+            </div>
+          </div>
+
+          <div class="grid-3">
+            <div class="panel">
+              <h2>صفحات پربازدید</h2>
+              <div id="top-pages"></div>
+            </div>
+            <div class="panel">
+              <h2>ارجاع‌دهنده‌ها</h2>
+              <div id="top-referrers"></div>
+            </div>
+            <div class="panel">
+              <h2>مرورگرها</h2>
+              <div id="top-browsers"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-behavior" class="hidden">
+          <div class="topbar">
+            <h1>رفتار و کمپین</h1>
+            <div class="topbar-actions">
+              <select id="site-filter-b" class="chip-select" aria-label="انتخاب سایت"></select>
+              <select id="days-filter-b" class="chip-select" aria-label="بازه زمانی">
+                <option value="1">۲۴ ساعت</option>
+                <option value="7" selected>۷ روز</option>
+                <option value="14">۱۴ روز</option>
+                <option value="30">۳۰ روز</option>
+                <option value="90">۹۰ روز</option>
+              </select>
+            </div>
+          </div>
+          <p class="panel-note">
+            زمان فعال حداکثر ۳۰ دقیقه برای هر بازدید است. پارامترهای UTM تا آخر همان نشست روی صفحه‌های بعدی می‌مانند. کلیک مقدار فیلدها را نمی‌خواند.
+          </p>
+          <p class="form-error" id="behavior-error"></p>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h2>عمق اسکرول</h2>
+              <div class="depth-meter" id="depth-meter" aria-hidden="true"></div>
+              <div id="scroll-legend"></div>
+            </div>
+            <div class="panel">
+              <h2>کمپین‌ها</h2>
+              <div class="table-wrap" id="campaign-table"></div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h2>کجا کلیک شده</h2>
+              <div class="table-wrap" id="click-table"></div>
+            </div>
+            <div class="panel">
+              <h2>زمان ماندن در صفحه</h2>
+              <div class="table-wrap" id="engage-table"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-sites" class="hidden">
+          <div class="topbar">
+            <h1>سایت‌ها</h1>
+            <div class="topbar-actions">
+              <button type="button" class="btn btn-primary" id="add-site-btn" style="width: auto">
+                افزودن سایت
+              </button>
+            </div>
+          </div>
+          <p class="panel-note">
+            کلیک، اسکرول، زمان فعال و UTM با همان تگ اسکریپت ثبت می‌شود. برای اسم دلخواه روی یک دکمه، ویژگی <code dir="ltr">data-ia</code> بگذارید. <code dir="ltr">data-ia-ignore</code> آن عنصر را از کلیک خارج می‌کند.
+          </p>
+          <div class="panel">
+            <div class="sites-list" id="sites-list"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="modal-root" class="hidden"></div>
+    <script src="./js/charts.js"></script>
+    <script src="./js/app.js"></script>
+  </body>
+</html>
