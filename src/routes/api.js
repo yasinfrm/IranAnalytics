@@ -374,6 +374,21 @@ router.get('/stats/behavior', async (req, res) => {
   }
 });
 
+router.get('/stats/events', async (req, res) => {
+  try {
+    const days = parseRange(req);
+    const siteId = req.query.site || 'all';
+    const { siteClause, daysP, params } = rangeParams(siteId, days);
+
+    const { rows } = await query(
+      `SELECT name, COUNT(*)::int AS count
+       FROM events
+       WHERE created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}
+       GROUP BY name
+       ORDER BY count DESC
+       LIMIT 50`,
+      params
+    );
     res.json({ events: rows });
   } catch (err) {
     console.error(err);
