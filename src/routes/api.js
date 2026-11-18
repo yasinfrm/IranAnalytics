@@ -562,4 +562,138 @@ router.get('/stats/conversions', async (req, res) => {
   }
 });
 
+router.get('/stats/journeys', async (req, res) => {
+  try {
+    const days = parseRange(req);
+    const siteId = req.query.site || 'all';
+    const limit = Math.min(Number(req.query.limit) || 25, 80);
+    const base = rangeParams(siteId, days);
+    const { siteClause, daysP } = base;
+    const where = `created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}`;
+
+    const sessions = await query(
+      `SELECT session_id,
+              MIN(created_at) AS started_at,
+              COUNT(*)::int AS pages,
+              MAX(utm_source) AS source,
+              MAX(utm_medium) AS medium,
+              MAX(utm_campaign) AS campaign
+       FROM pageviews
+       WHERE ${where}
+         AND session_id <> ''
+       GROUP BY session_id
+       ORDER BY started_at DESC
+       LIMIT ${limit}`,
+      [...base.params]
+    );
+
+    const sidList = sessions.rows.map((r) => r.session_id).filter(Boolean);
+    if (!sidList.length) {
+      return res.json({ days, journeys: [], funnels: [] });
+    }
+
+    // Fetch paths / conversions for these sessions (chunked IN list).
+    const placeholders = sidList.map((_, i) => `$${base.params.length + i + 1}`).join(',');
+    const sidParams = [...base.params, ...sidList];
+
+    const pageRows = await query(
+      `SELECT session_id, path, title, created_at, utm_source, utm_medium, utm_campaign
+       FROM pageviews
+       WHERE ${where}
+         AND session_id IN (${placeholders})
+       ORDER BY created_at ASC`,
+      sidParams
+    );
+
+    const convRows = await query(
+      `SELECT session_id, created_at, props
+       FROM events
+       WHERE name = 'conversion'
+         AND ${where}
+         AND session_id IN (${placeholders})
+       ORDER BY created_at ASC`,
+      sidParams
+    );
+
+    const pagesBySid = new Map();
+    for (const row of pageRows.rows) {
+      if (!pagesBySid.has(row.session_id)) pagesBySid.set(row.session_id, []);
+      pagesBySid.get(row.session_id).push(row);
+    }
+    const convBySid = new Map();
+    for (const row of convRows.rows) {
+      if (!convBySid.has(row.session_id)) convBySid.set(row.session_id, []);
+      let props = row.props;
+      if (typeof props === 'string') {
+        try {
+          props = JSON.parse(props);
+        } catch {
+          props = {};
+        }
+      }
+      convBySid.get(row.session_id).push({
+        at: row.created_at,
+        goal: props?.goal || 'goal',
+        source: props?.source || '',
+        medium: props?.medium || '',
+        campaign: props?.campaign || '',
+      });
+    }
+
+    const journeys = sessions.rows.map((s) => {
+      const rawPages = pagesBySid.get(s.session_id) || [];
+      const pages = rawPages.map((p) => ({
+        path: p.path,
+        title: p.title || '',
+        at: p.created_at,
+      }));
+      const conversions = convBySid.get(s.session_id) || [];
+      const landing = pages[0] || null;
+      const tagged = rawPages.find((p) => p.utm_source || p.utm_medium || p.utm_campaign);
+      return {
+        session_id: s.session_id,
+        started_at: s.started_at,
+        pages_count: Number(s.pages) || pages.length,
+        source: s.source || tagged?.utm_source || '',
+        medium: s.medium || tagged?.utm_medium || '',
+        campaign: s.campaign || tagged?.utm_campaign || '',
+        landing: landing ? { path: landing.path, title: landing.title || '' } : null,
+        path: pages.map((p) => p.path),
+        conversions,
+        converted: conversions.length > 0,
+      };
+    });
+
+    // Landing page → conversion funnel (sessions that started on a path).
+    const landMap = new Map();
+    for (const j of journeys) {
+      const landPath = j.landing?.path || '(unknown)';
+      if (!landMap.has(landPath)) {
+        landMap.set(landPath, {
+          path: landPath,
+          title: j.landing?.title || '',
+          sessions: 0,
+          converted: 0,
+        });
+      }
+      const bucket = landMap.get(landPath);
+      bucket.sessions += 1;
+      if (j.converted) bucket.converted += 1;
+      if (!bucket.title && j.landing?.title) bucket.title = j.landing.title;
+    }
+    const funnels = [...landMap.values()]
+      .map((row) => ({
+        ...row,
+        cvr: row.sessions > 0 ? Math.round((row.converted / row.sessions) * 1000) / 10 : 0,
+      }))
+      .sort((a, b) => b.sessions - a.sessions || b.converted - a.converted)
+      .slice(0, 30);
+
+    res.json({ days, journeys, funnels });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
 export default router;

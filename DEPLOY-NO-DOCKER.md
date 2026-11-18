@@ -31,7 +31,44 @@ Use this when Docker Hub / `get.docker.com` / some `dnf` mirrors are blocked (OF
 | Schema | Automatic on `npm start`, or `npm run db:migrate` |
 | Start | `npm start` → `node src/server.js` |
 
-Stock app does **not** auto-load a `.env` file — export vars or use systemd `Environment=`.
+Stock app does **not** auto-load a `.env` file — export vars or use systemd `EnvironmentFile=`.
+
+---
+
+## Recommended: systemd (survives SSH disconnect / reboot)
+
+On the VPS (AlmaLinux / cPanel), from the app directory:
+
+```bash
+cd /opt/iran-analytics
+git pull origin main
+bash scripts/server-install.sh
+# edit password once:
+nano /etc/iran-analytics.env
+systemctl restart iran-analytics
+curl -s http://127.0.0.1:3000/healthz
+```
+
+Service unit: [`deploy/iran-analytics.service`](./deploy/iran-analytics.service).  
+This replaces fragile `nohup … &` from older deploys.
+
+### WordPress snippet (avoid LiteSpeed stealing `/t.js`)
+
+Prefer the plugin in [`wordpress/iran-analytics.php`](./wordpress/iran-analytics.php):
+
+1. Copy to `wp-content/plugins/iran-analytics/iran-analytics.php` (or `mu-plugins/`).
+2. In `wp-config.php`:
+   ```php
+   define('IRAN_ANALYTICS_SRC', 'https://stats.homamigration.net/t.js');
+   define('IRAN_ANALYTICS_SITE', 'ia_YOUR_PUBLIC_KEY');
+   ```
+3. Activate plugin → LiteSpeed **Purge All**.
+
+Or paste this tag (must stay on `stats.…`, not `wp-content/cache/min/`):
+
+```html
+<script defer src="https://stats.homamigration.net/t.js" data-site="ia_YOUR_PUBLIC_KEY" data-api="https://stats.homamigration.net" data-no-optimize="1" data-no-minify="1"></script>
+```
 
 ---
 
@@ -79,29 +116,15 @@ Admin: `http://YOUR_IP:3000/admin/`
 
 Data file: `./data/iran-analytics.db` (backup this file). Add `data/` to your backup job.
 
-### systemd example (SQLite)
+### systemd
 
-```ini
-[Unit]
-Description=Iran Analytics
-After=network.target
+Use the unit shipped in the repo (password via `/etc/iran-analytics.env`):
 
-[Service]
-Type=simple
-WorkingDirectory=/opt/iran-analytics
-Environment=NODE_ENV=production
-Environment=PORT=3000
-Environment=DATABASE_URL=sqlite:./data/iran-analytics.db
-Environment=ADMIN_USERNAME=admin
-Environment=ADMIN_PASSWORD=CHANGE_ME_ADMIN_PASS
-Environment=COOKIE_SECURE=false
-Environment=TRUST_PROXY=true
-ExecStart=/usr/bin/npm start
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
+```bash
+bash scripts/server-install.sh
 ```
+
+See [`deploy/iran-analytics.service`](./deploy/iran-analytics.service).
 
 ---
 

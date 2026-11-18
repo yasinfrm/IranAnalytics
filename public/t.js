@@ -396,7 +396,47 @@
     setTimeout(rotate, 0);
   });
 
+  function onSubmit(e) {
+    if (!view || isNoisePath()) return;
+    var form = e.target;
+    if (!form || !form.tagName || form.tagName.toLowerCase() !== 'form') return;
+    if (form.closest('[data-ia-ignore], #wpadminbar, .wp-admin')) return;
+
+    var goal = clip(form.getAttribute('data-ia-goal'), 40);
+    if (!goal) {
+      var action = '';
+      try {
+        action = (form.getAttribute('action') || '').toLowerCase();
+      } catch (err) {}
+      var idName = ((form.id || '') + ' ' + (form.getAttribute('name') || '')).toLowerCase();
+      var text = '';
+      try {
+        text = (form.innerText || form.textContent || '').slice(0, 200);
+      } catch (err2) {}
+      if (
+        /consult|contact|lead|مشاوره|تماس|ارزیابی/.test(action + ' ' + idName) ||
+        /مشاوره|درخواست\s*ارزیابی|تماس\s*بگیر/.test(text)
+      ) {
+        goal = 'form_consultation';
+      } else if (
+        form.querySelector(
+          'input[type="tel"], input[name*="phone"], input[name*="Phone"], input[name*="mobile"], input[name*="Mobile"]'
+        )
+      ) {
+        goal = 'form_lead';
+      }
+    }
+    if (!goal) return;
+
+    trackConversion(goal, {
+      el: 'form',
+      text: clip(form.getAttribute('name') || form.id || 'form', 80),
+      href: clip(form.getAttribute('action') || location.pathname, 300),
+    });
+  }
+
   document.addEventListener('click', onClick, true);
+  document.addEventListener('submit', onSubmit, true);
   window.addEventListener('scroll', measureScroll, { passive: true });
   window.addEventListener('resize', measureScroll);
   document.addEventListener('visibilitychange', function () {

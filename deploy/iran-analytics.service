@@ -1,0 +1,29 @@
+[Unit]
+Description=Iran Analytics (self-hosted)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/iran-analytics
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=DATABASE_URL=sqlite:./data/iran-analytics.db
+Environment=ADMIN_USERNAME=admin
+Environment=COOKIE_SECURE=true
+Environment=TRUST_PROXY=true
+Environment=IA_FORCE_SQLJS=1
+# Prefer EnvironmentFile for the password so it is not in git:
+#   /etc/iran-analytics.env  →  ADMIN_PASSWORD=...
+EnvironmentFile=-/etc/iran-analytics.env
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=20
+
+# Keep sql.js DB durable on stop
+ExecStop=/bin/sleep 1
+
+[Install]
+WantedBy=multi-user.target

@@ -518,6 +518,49 @@ a {
   min-width: 0;
 }
 
+.journey-list {
+  display: grid;
+  gap: 10px;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.journey-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fffdf8;
+}
+
+.journey-card.is-converted {
+  border-color: rgba(13, 110, 110, 0.35);
+  box-shadow: inset 3px 0 0 var(--sea);
+}
+
+.journey-top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.journey-path {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.journey-goals {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  color: var(--sea-deep);
+}
+
 .sites-list {
   display: grid;
   gap: 10px;

@@ -131,6 +131,8 @@ function sanitizeProps(name, raw, autoClick) {
     };
   }
 
+  // Form/auto conversions may arrive with goal in props without special name handling above.
+
   const out = {};
   for (const key of Object.keys(props)) {
     if (Object.keys(out).length >= 12) break;

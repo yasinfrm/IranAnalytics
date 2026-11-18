@@ -172,6 +172,8 @@
       contact_whatsapp: 'واتساپ',
       consultation: 'صفحه مشاوره',
       consultation_cta: 'دکمه مشاوره/تماس',
+      form_consultation: 'ارسال فرم مشاوره',
+      form_lead: 'ارسال فرم سرنخ',
     };
     return map[name] || name || 'هدف';
   }
@@ -224,6 +226,10 @@
 
   function embedSnippet(publicKey) {
     return `<script defer src="${origin}/t.js" data-site="${publicKey}" data-api="${origin}" data-no-optimize="1" data-no-minify="1"><\/script>`;
+  }
+
+  function wordpressHint(publicKey) {
+    return `define('IRAN_ANALYTICS_SRC', '${origin}/t.js');\ndefine('IRAN_ANALYTICS_SITE', '${publicKey}');`;
   }
 
   function renderRankTable(el, rows, labelKey, valueKey, opts = {}) {
@@ -479,6 +485,8 @@
             <h3>${escapeHtml(s.name)}${s.is_active ? '' : ' (غیرفعال)'}</h3>
             <p class="site-meta">${escapeHtml(s.domain || 'بدون دامنه')} · امروز ${faNum(s.views_today)} بازدید · کلید: <code dir="ltr">${escapeHtml(s.public_key)}</code></p>
             <pre class="code-block">${escapeHtml(embedSnippet(s.public_key))}</pre>
+            <p class="site-meta">وردپرس (wp-config) + افزونه <code dir="ltr">wordpress/iran-analytics.php</code>:</p>
+            <pre class="code-block">${escapeHtml(wordpressHint(s.public_key))}</pre>
           </div>
           <div class="site-actions">
             <button type="button" class="btn btn-ghost" data-copy="${escapeHtml(s.public_key)}">کپی کلید</button>
@@ -608,8 +616,12 @@
     errEl.textContent = '';
 
     let data;
+    let journeysData = { journeys: [], funnels: [] };
     try {
-      data = await api(`/api/stats/conversions?${q}`);
+      [data, journeysData] = await Promise.all([
+        api(`/api/stats/conversions?${q}`),
+        api(`/api/stats/journeys?${q}`),
+      ]);
     } catch (err) {
       if (!err || err.message !== 'unauthorized') errEl.textContent = 'بارگذاری گزارش تبدیل ناموفق بود.';
       return;
@@ -670,6 +682,53 @@
           </tr>`;
         })
         .join('')}</tbody></table>`;
+    }
+
+    const funnelEl = document.getElementById('funnel-table');
+    const funnels = journeysData.funnels || [];
+    if (!funnels.length) {
+      funnelEl.innerHTML = '<p class="empty">هنوز لندینگی برای قیف نیست.</p>';
+    } else {
+      funnelEl.innerHTML = `<table class="table wide"><thead><tr>
+        <th>لندینگ</th><th>نشست</th><th>تبدیل</th><th>نرخ</th>
+      </tr></thead><tbody>${funnels
+        .map((row) => {
+          const label = pageLabel(row);
+          return `<tr>
+            <td>${escapeHtml(label.main)}${
+              label.sub ? `<span class="cell-sub" dir="ltr">${escapeHtml(label.sub)}</span>` : ''
+            }</td>
+            <td>${faNum(row.sessions)}</td>
+            <td>${faNum(row.converted)}</td>
+            <td>${faPct(row.cvr)}</td>
+          </tr>`;
+        })
+        .join('')}</tbody></table>`;
+    }
+
+    const journeyEl = document.getElementById('journey-table');
+    const journeys = journeysData.journeys || [];
+    if (!journeys.length) {
+      journeyEl.innerHTML = '<p class="empty">نشستی در این بازه نیست.</p>';
+    } else {
+      journeyEl.innerHTML = `<div class="journey-list">${journeys
+        .slice(0, 20)
+        .map((j) => {
+          const camp = [j.source, j.medium, j.campaign].filter(Boolean).join(' · ');
+          const steps = (j.path || []).map((p) => escapeHtml(prettyPath(p))).join(' ← ');
+          const goals = (j.conversions || []).map((c) => goalLabel(c.goal)).join('، ');
+          return `<article class="journey-card ${j.converted ? 'is-converted' : ''}">
+            <div class="journey-top">
+              <span>${j.converted ? 'تبدیل شد' : 'بدون تبدیل'}</span>
+              <span class="cell-sub">${camp ? escapeHtml(camp) : 'ورود مستقیم/بدون UTM'} · ${faNum(
+                j.pages_count
+              )} صفحه</span>
+            </div>
+            <p class="journey-path" dir="ltr">${steps || '—'}</p>
+            ${goals ? `<p class="journey-goals">هدف: ${escapeHtml(goals)}</p>` : ''}
+          </article>`;
+        })
+        .join('')}</div>`;
     }
   }
 
