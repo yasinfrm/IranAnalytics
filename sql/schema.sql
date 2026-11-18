@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS goals (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_pageviews_site_created ON pageviews (site_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pageviews_site_path ON pageviews (site_id, path);
 CREATE INDEX IF NOT EXISTS idx_pageviews_site_referrer ON pageviews (site_id, referrer_host);

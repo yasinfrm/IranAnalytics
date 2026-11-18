@@ -4,13 +4,18 @@ import {
   createSession,
   destroySession,
   isValidSession,
+  shouldRefreshSession,
   cookieOptions,
 } from '../lib/auth.js';
 
 const router = Router();
 
 router.get('/me', (req, res) => {
-  const ok = isValidSession(req.cookies?.ia_session);
+  const token = req.cookies?.ia_session;
+  const ok = isValidSession(token);
+  if (ok && shouldRefreshSession(token)) {
+    res.cookie('ia_session', createSession(), cookieOptions());
+  }
   res.json({ authenticated: ok });
 });
 

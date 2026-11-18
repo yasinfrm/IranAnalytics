@@ -1,17 +1,20 @@
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import { query } from './db.js';
 
-const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
-const sessions = new Map();
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+const revoked = new Map();
 
-function pruneSessions() {
+let dbSecret = process.env.SESSION_SECRET || '';
+
+function pruneRevoked() {
   const now = Date.now();
-  for (const [id, s] of sessions) {
-    if (s.expiresAt <= now) sessions.delete(id);
+  for (const [jti, exp] of revoked) {
+    if (exp <= now) revoked.delete(jti);
   }
 }
 
-setInterval(pruneSessions, 60_000).unref?.();
+setInterval(pruneRevoked, 600_000).unref?.();
 
 export function getAdminPasswordHash() {
   const hash = process.env.ADMIN_PASSWORD_HASH;
@@ -27,31 +30,99 @@ export function adminHash() {
   return cachedHash;
 }
 
+let cachedPwFingerprint = null;
+function passwordFingerprint() {
+  if (!cachedPwFingerprint) {
+    const raw = process.env.ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD || 'changeme';
+    cachedPwFingerprint = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
+  }
+  return cachedPwFingerprint;
+}
+
+/** Load or generate a durable signing secret in DB so logins survive restarts. */
+export async function initAuthSecret() {
+  if (process.env.SESSION_SECRET) {
+    dbSecret = process.env.SESSION_SECRET;
+    return;
+  }
+  try {
+    const { rows } = await query('SELECT value FROM settings WHERE key = $1 LIMIT 1', ['session_secret']);
+    if (rows[0]?.value) {
+      dbSecret = rows[0].value;
+      return;
+    }
+    const generated = crypto.randomBytes(32).toString('hex');
+    await query('INSERT INTO settings (key, value) VALUES ($1, $2)', ['session_secret', generated]);
+    dbSecret = generated;
+  } catch (err) {
+    console.warn('initAuthSecret fallback:', err.message);
+    if (!dbSecret) dbSecret = crypto.randomBytes(32).toString('hex');
+  }
+}
+
+function signingKey() {
+  const base = dbSecret || process.env.SESSION_SECRET || 'fallback-dev-secret';
+  return crypto
+    .createHash('sha256')
+    .update(base + ':' + passwordFingerprint())
+    .digest();
+}
+
+function sign(payloadB64) {
+  return crypto.createHmac('sha256', signingKey()).update(payloadB64).digest('base64url');
+}
+
 export async function verifyPassword(password) {
   return bcrypt.compare(password, adminHash());
 }
 
 export function createSession() {
-  const id = crypto.randomBytes(32).toString('hex');
-  sessions.set(id, { expiresAt: Date.now() + SESSION_TTL_MS });
-  return id;
+  const payload = {
+    jti: crypto.randomBytes(12).toString('hex'),
+    exp: Date.now() + SESSION_TTL_MS,
+  };
+  const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  return `${body}.${sign(body)}`;
 }
 
-export function destroySession(id) {
-  if (id) sessions.delete(id);
-}
+function parseToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const dot = token.indexOf('.');
+  if (dot <= 0) return null;
+  const body = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  if (!body || !sig) return null;
 
-export function isValidSession(id) {
-  if (!id) return false;
-  const s = sessions.get(id);
-  if (!s) return false;
-  if (s.expiresAt <= Date.now()) {
-    sessions.delete(id);
-    return false;
+  const expected = sign(body);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+  try {
+    const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!parsed || typeof parsed.exp !== 'number' || !parsed.jti) return null;
+    if (parsed.exp <= Date.now()) return null;
+    if (revoked.has(parsed.jti)) return null;
+    return parsed;
+  } catch {
+    return null;
   }
-  // sliding expiry
-  s.expiresAt = Date.now() + SESSION_TTL_MS;
-  return true;
+}
+
+export function destroySession(token) {
+  const parsed = parseToken(token);
+  if (parsed) revoked.set(parsed.jti, parsed.exp);
+}
+
+export function isValidSession(token) {
+  return !!parseToken(token);
+}
+
+export function shouldRefreshSession(token) {
+  const parsed = parseToken(token);
+  if (!parsed) return false;
+  // Refresh cookie if less than 20 days remain so active admins stay signed in.
+  return parsed.exp - Date.now() < 1000 * 60 * 60 * 24 * 20;
 }
 
 export function cookieOptions() {

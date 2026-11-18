@@ -1,17 +1,25 @@
 (function () {
+  const STATE_KEY = 'ia_panel_state_v1';
+
   const loginView = document.getElementById('login-view');
   const appView = document.getElementById('app-view');
   const loginForm = document.getElementById('login-form');
   const loginError = document.getElementById('login-error');
   const logoutBtn = document.getElementById('logout-btn');
+  const logoutBtnMobile = document.getElementById('logout-btn-mobile');
+  const mainEl = document.querySelector('.main');
 
   const globalFilterBar = document.getElementById('global-filter-bar');
+  const filterBarBody = document.getElementById('filter-bar-body');
+  const filterToggleBtn = document.getElementById('filter-toggle-btn');
+  const filterMobileMeta = document.getElementById('filter-mobile-meta');
   const fSite = document.getElementById('f-site');
   const fSource = document.getElementById('f-source');
   const fCampaign = document.getElementById('f-campaign');
   const fResetBtn = document.getElementById('f-reset-btn');
   const exportType = document.getElementById('export-report-type');
   const exportBtn = document.getElementById('export-btn');
+  const exportBtnMobile = document.getElementById('export-btn-mobile');
   const filterSummary = document.getElementById('active-filter-summary');
 
   const sitesList = document.getElementById('sites-list');
@@ -28,19 +36,86 @@
   let currentView = 'dashboard';
   let prevView = 'dashboard';
   let currentPagePath = '';
+  let pendingDesired = { site: 'all', source: 'all', campaign: 'all' };
 
+  function loadSavedState() {
+    let saved = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') || {};
+    } catch {
+      saved = {};
+    }
+    try {
+      if (location.hash && location.hash.length > 1) {
+        const hp = new URLSearchParams(location.hash.slice(1));
+        for (const k of ['site', 'from', 'to', 'source', 'campaign', 'view', 'pagePath', 'exportType']) {
+          if (hp.has(k)) saved[k] = hp.get(k);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return saved;
+  }
+
+  function saveState() {
+    const state = {
+      site: fSite.value || 'all',
+      from: dateRange.from,
+      to: dateRange.to,
+      source: fSource.value || 'all',
+      campaign: fCampaign.value || 'all',
+      view: currentView,
+      pagePath: currentPagePath || '',
+      exportType: exportType.value || 'pages',
+    };
+    try {
+      localStorage.setItem(STATE_KEY, JSON.stringify(state));
+    } catch {
+      /* ignore */
+    }
+    try {
+      const hp = new URLSearchParams();
+      hp.set('view', state.view);
+      if (state.site !== 'all') hp.set('site', state.site);
+      hp.set('from', state.from);
+      hp.set('to', state.to);
+      if (state.source !== 'all') hp.set('source', state.source);
+      if (state.campaign !== 'all') hp.set('campaign', state.campaign);
+      if (state.view === 'page' && state.pagePath) hp.set('pagePath', state.pagePath);
+      history.replaceState(null, '', '#' + hp.toString());
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const savedInit = loadSavedState();
   const today = IAJalali.todayJalali();
-  const initialFrom = IAJalali.addJalaliDays(today, -6);
+  const defaultFrom = IAJalali.addJalaliDays(today, -6);
+  const parsedFrom = savedInit.from ? IAJalali.parseStr(savedInit.from) : null;
+  const parsedTo = savedInit.to ? IAJalali.parseStr(savedInit.to) : null;
+
+  const initFromObj = parsedFrom && parsedTo ? parsedFrom : defaultFrom;
+  const initToObj = parsedFrom && parsedTo ? parsedTo : today;
   let dateRange = {
-    from: IAJalali.formatStr(initialFrom),
-    to: IAJalali.formatStr(today),
+    from: IAJalali.formatStr(initFromObj),
+    to: IAJalali.formatStr(initToObj),
   };
+
+  pendingDesired = {
+    site: savedInit.site || 'all',
+    source: savedInit.source || 'all',
+    campaign: savedInit.campaign || 'all',
+  };
+  if (savedInit.pagePath) currentPagePath = savedInit.pagePath;
+  if (savedInit.exportType) exportType.value = savedInit.exportType;
 
   const picker = IAJalali.createRangePicker(
     document.getElementById('f-jalali-mount'),
-    { from: initialFrom, to: today },
+    { from: initFromObj, to: initToObj },
     (next) => {
       dateRange = next;
+      saveState();
       refreshFilterChoices().then(reloadCurrentView);
     }
   );
@@ -185,6 +260,7 @@
 
   function updateFilterUI() {
     const hasCustom =
+      (fSite.value && fSite.value !== 'all') ||
       (fSource.value && fSource.value !== 'all') ||
       (fCampaign.value && fCampaign.value !== 'all');
     fResetBtn.classList.toggle('hidden', !hasCustom);
@@ -192,7 +268,13 @@
     const bits = [`${IAJalali.toFaDigits(dateRange.from)} تا ${IAJalali.toFaDigits(dateRange.to)}`];
     if (fSource.value && fSource.value !== 'all') bits.push(`منبع: ${sourceLabel(fSource.value)}`);
     if (fCampaign.value && fCampaign.value !== 'all') bits.push(`کمپین: ${fCampaign.value}`);
-    filterSummary.textContent = bits.join(' · ');
+    const summaryText = bits.join(' · ');
+    filterSummary.textContent = summaryText;
+
+    const shortBits = [IAJalali.toFaDigits(dateRange.from.slice(5)) + '–' + IAJalali.toFaDigits(dateRange.to.slice(5))];
+    if (fSource.value && fSource.value !== 'all') shortBits.push(sourceLabel(fSource.value));
+    if (fCampaign.value && fCampaign.value !== 'all') shortBits.push(fCampaign.value);
+    filterMobileMeta.textContent = shortBits.join(' · ');
   }
 
   function showLogin() {
@@ -205,40 +287,53 @@
     appView.classList.remove('hidden');
   }
 
-  function setView(name) {
-    if (name !== 'page' && currentView !== 'page') {
+  function setView(name, opts = {}) {
+    const valid = new Set(['dashboard', 'behavior', 'page', 'conversions', 'goals', 'sites']);
+    const target = valid.has(name) ? name : 'dashboard';
+    if (target === 'page' && !currentPagePath) {
+      return setView('dashboard', opts);
+    }
+    if (target !== 'page' && currentView !== 'page') {
       prevView = currentView;
     }
-    currentView = name;
+    currentView = target;
     document.querySelectorAll('.nav button').forEach((b) => {
-      const target = name === 'page' ? prevView : name;
-      b.classList.toggle('active', b.dataset.view === target);
+      const activeTarget = target === 'page' ? prevView : target;
+      b.classList.toggle('active', b.dataset.view === activeTarget);
     });
-    const showFilters = name !== 'sites' && name !== 'goals';
+    const showFilters = target !== 'sites' && target !== 'goals';
     globalFilterBar.classList.toggle('hidden', !showFilters);
 
-    document.getElementById('view-dashboard').classList.toggle('hidden', name !== 'dashboard');
-    document.getElementById('view-behavior').classList.toggle('hidden', name !== 'behavior');
-    document.getElementById('view-page').classList.toggle('hidden', name !== 'page');
-    document.getElementById('view-conversions').classList.toggle('hidden', name !== 'conversions');
-    document.getElementById('view-goals').classList.toggle('hidden', name !== 'goals');
-    document.getElementById('view-sites').classList.toggle('hidden', name !== 'sites');
+    document.getElementById('view-dashboard').classList.toggle('hidden', target !== 'dashboard');
+    document.getElementById('view-behavior').classList.toggle('hidden', target !== 'behavior');
+    document.getElementById('view-page').classList.toggle('hidden', target !== 'page');
+    document.getElementById('view-conversions').classList.toggle('hidden', target !== 'conversions');
+    document.getElementById('view-goals').classList.toggle('hidden', target !== 'goals');
+    document.getElementById('view-sites').classList.toggle('hidden', target !== 'sites');
 
-    if (name === 'behavior') exportType.value = 'sources';
-    else if (name === 'conversions') exportType.value = 'conversions';
-    else if (name === 'dashboard') exportType.value = 'pages';
+    if (!opts.keepExport) {
+      if (target === 'behavior') exportType.value = 'sources';
+      else if (target === 'conversions') exportType.value = 'conversions';
+      else if (target === 'dashboard') exportType.value = 'pages';
+    }
 
+    saveState();
     reloadCurrentView();
   }
 
-  function reloadCurrentView() {
+  async function reloadCurrentView() {
     updateFilterUI();
-    if (currentView === 'dashboard') loadDashboard();
-    else if (currentView === 'behavior') loadBehavior();
-    else if (currentView === 'page') loadPageDetail(currentPagePath);
-    else if (currentView === 'conversions') loadConversions();
-    else if (currentView === 'goals') loadGoals();
-    else if (currentView === 'sites') renderSites();
+    mainEl.classList.add('is-loading');
+    try {
+      if (currentView === 'dashboard') await loadDashboard();
+      else if (currentView === 'behavior') await loadBehavior();
+      else if (currentView === 'page') await loadPageDetail(currentPagePath);
+      else if (currentView === 'conversions') await loadConversions();
+      else if (currentView === 'goals') await loadGoals();
+      else if (currentView === 'sites') renderSites();
+    } finally {
+      mainEl.classList.remove('is-loading');
+    }
   }
 
   function openPageDetail(path) {
@@ -248,6 +343,11 @@
     setView('page');
   }
 
+  filterToggleBtn.addEventListener('click', () => {
+    const open = filterBarBody.classList.toggle('is-open');
+    filterToggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+
   document.querySelectorAll('.nav button').forEach((btn) => {
     btn.addEventListener('click', () => setView(btn.dataset.view));
   });
@@ -256,19 +356,41 @@
     setView(prevView || 'dashboard');
   });
 
-  fSite.addEventListener('change', () => refreshFilterChoices().then(reloadCurrentView));
-  fSource.addEventListener('change', reloadCurrentView);
-  fCampaign.addEventListener('change', reloadCurrentView);
-  fResetBtn.addEventListener('click', () => {
-    fSource.value = 'all';
-    fCampaign.value = 'all';
+  fSite.addEventListener('change', () => {
+    pendingDesired.site = fSite.value;
+    saveState();
+    refreshFilterChoices().then(reloadCurrentView);
+  });
+  fSource.addEventListener('change', () => {
+    pendingDesired.source = fSource.value;
+    saveState();
     reloadCurrentView();
   });
-
-  exportBtn.addEventListener('click', () => {
-    const rep = exportType.value || 'pages';
-    location.href = `/api/export.csv?${filterQuery({ report: rep })}`;
+  fCampaign.addEventListener('change', () => {
+    pendingDesired.campaign = fCampaign.value;
+    saveState();
+    reloadCurrentView();
   });
+  exportType.addEventListener('change', saveState);
+
+  fResetBtn.addEventListener('click', () => {
+    fSite.value = 'all';
+    fSource.value = 'all';
+    fCampaign.value = 'all';
+    pendingDesired = { site: 'all', source: 'all', campaign: 'all' };
+    saveState();
+    refreshFilterChoices().then(reloadCurrentView);
+  });
+
+  function downloadExport() {
+    const rep = currentView === 'page' && currentPagePath ? 'page_detail' : exportType.value || 'pages';
+    location.href = `/api/export.csv?${filterQuery({
+      report: rep,
+      path: rep === 'page_detail' ? currentPagePath : '',
+    })}`;
+  }
+  exportBtn.addEventListener('click', downloadExport);
+  exportBtnMobile.addEventListener('click', downloadExport);
 
   document.getElementById('page-export-btn').addEventListener('click', () => {
     if (!currentPagePath) return;
@@ -309,19 +431,21 @@
     }
   });
 
-  logoutBtn.addEventListener('click', async () => {
+  async function doLogout() {
     try {
       await api('/auth/logout', { method: 'POST', body: '{}' });
     } catch {
       /* ignore */
     }
     showLogin();
-  });
+  }
+  logoutBtn.addEventListener('click', doLogout);
+  logoutBtnMobile.addEventListener('click', doLogout);
 
   addSiteBtn.addEventListener('click', () => openSiteModal());
 
   function fillSiteSelectors() {
-    const current = fSite.value || 'all';
+    const desired = fSite.value || pendingDesired.site || 'all';
     const options =
       `<option value="all">همه سایت‌ها</option>` +
       sites
@@ -331,7 +455,7 @@
         )
         .join('');
     fSite.innerHTML = options;
-    fSite.value = sites.some((s) => s.id === current) ? current : 'all';
+    fSite.value = sites.some((s) => s.id === desired) ? desired : 'all';
 
     const curGoalSite = goalSite.value;
     goalSite.innerHTML = sites.length
@@ -351,8 +475,8 @@
         dateRange.from
       )}&to=${encodeURIComponent(dateRange.to)}`;
       const data = await api(`/api/stats/filters?${q}`);
-      const curSrc = fSource.value || 'all';
-      const curCamp = fCampaign.value || 'all';
+      const curSrc = fSource.value !== 'all' ? fSource.value : pendingDesired.source || 'all';
+      const curCamp = fCampaign.value !== 'all' ? fCampaign.value : pendingDesired.campaign || 'all';
 
       const srcList = data.sources || [];
       fSource.innerHTML =
@@ -432,6 +556,7 @@
       .map((s) => {
         const timed = Number(s.avg_ms) > 0;
         const scrolled = s.avg_scroll != null && s.avg_scroll !== '' && Number.isFinite(Number(s.avg_scroll));
+        const cvrVal = Number(s.cvr || 0);
         return `<tr>
           <td><strong>${escapeHtml(sourceLabel(s.source))}</strong><span class="cell-sub" dir="ltr">${escapeHtml(s.source)}</span></td>
           <td>${faNum(s.views)}</td>
@@ -439,7 +564,7 @@
           <td>${timed ? faDuration(s.avg_ms) : '—'}</td>
           <td>${scrolled ? faPct(s.avg_scroll) : '—'}</td>
           <td>${faNum(s.converting_sessions || 0)}</td>
-          <td>${faPct(s.cvr || 0)}</td>
+          <td><span class="pill ${cvrVal > 0 ? '' : 'warn'}">${faPct(cvrVal)}</span></td>
         </tr>`;
       })
       .join('')}</tbody></table>`;
@@ -505,8 +630,9 @@
 
     document.getElementById('stat-pageviews').textContent = faNum(overview.pageviews);
     document.getElementById('stat-sessions').textContent = faNum(overview.sessions);
-    document.getElementById('stat-pages').textContent = faNum(overview.unique_pages);
-    document.getElementById('stat-events').textContent = faNum(overview.events);
+    document.getElementById('stat-pages-sub').textContent = `${faNum(overview.unique_pages)} صفحه یکتا`;
+    document.getElementById('stat-pages').textContent = `${faNum(overview.unique_pages)} / ${faNum(overview.events)}`;
+    document.getElementById('stat-events-sub').textContent = `${faNum(overview.events)} رویداد ثبت‌شده`;
     document.getElementById('stat-time').textContent = overview.avg_ms == null ? '—' : faDuration(overview.avg_ms);
     document.getElementById('stat-scroll').textContent = overview.avg_scroll == null ? '—' : faPct(overview.avg_scroll);
     document.getElementById('stat-clicks').textContent = faNum(overview.clicks);
@@ -735,11 +861,12 @@
         .map((row) => {
           const title = row.campaign || sourceLabel(row.source) || 'بدون نام';
           const sub = [sourceLabel(row.source), row.medium].filter(Boolean).join(' · ');
+          const cvrVal = Number(row.cvr || 0);
           return `<tr>
             <td>${escapeHtml(title)}${sub ? `<span class="cell-sub">${escapeHtml(sub)}</span>` : ''}</td>
             <td>${faNum(row.sessions)}</td>
             <td>${faNum(row.converting_sessions || row.conversions)}</td>
-            <td>${faPct(row.cvr)}</td>
+            <td><span class="pill ${cvrVal > 0 ? '' : 'warn'}">${faPct(cvrVal)}</span></td>
           </tr>`;
         })
         .join('')}</tbody></table>`;
@@ -773,13 +900,14 @@
       </tr></thead><tbody>${funnels
         .map((row) => {
           const label = pageLabel(row);
+          const cvrVal = Number(row.cvr || 0);
           return `<tr class="link-row" data-open-page="${escapeHtml(row.path)}">
             <td><span class="link-title">${escapeHtml(label.main)}</span>${
               label.sub ? `<span class="cell-sub" dir="ltr">${escapeHtml(label.sub)}</span>` : ''
             }</td>
             <td>${faNum(row.sessions)}</td>
             <td>${faNum(row.converted)}</td>
-            <td>${faPct(row.cvr)}</td>
+            <td><span class="pill ${cvrVal > 0 ? '' : 'warn'}">${faPct(cvrVal)}</span></td>
           </tr>`;
         })
         .join('')}</tbody></table>`;
@@ -999,7 +1127,7 @@
   async function bootstrap() {
     await refreshSites();
     await refreshFilterChoices();
-    setView('dashboard');
+    setView(savedInit.view || 'dashboard', { keepExport: true });
   }
 
   async function init() {

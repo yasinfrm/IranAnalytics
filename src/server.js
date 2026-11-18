@@ -4,6 +4,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { initDb, migrate, ping, dialect, engine } from './lib/db.js';
+import { initAuthSecret } from './lib/auth.js';
 import trackRoutes from './routes/track.js';
 import authRoutes from './routes/auth.js';
 import apiRoutes from './routes/api.js';
@@ -16,6 +17,7 @@ const TRUST_PROXY = process.env.TRUST_PROXY !== 'false';
 async function main() {
   await initDb();
   await migrate();
+  await initAuthSecret();
   console.log(`Database migrated (${dialect}/${engine})`);
 
   const app = express();
