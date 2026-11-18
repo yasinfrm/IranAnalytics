@@ -2,30 +2,49 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { query, newId, dialect } from '../lib/db.js';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { normalizePath } from '../lib/path.js';
+import { buildFilters, sourceSqlExpr, dayExpr } from '../lib/filters.js';
+import { gregorianDayToJalaliStr, formatTimestampJalali } from '../lib/jalali.js';
 
 const router = Router();
 router.use(requireAuth);
 
-function parseRange(req) {
-  return Math.min(Math.max(Number(req.query.days) || 7, 1), 90);
+function eventProp(field, alias = 'e') {
+  const col = alias ? `${alias}.props` : 'props';
+  return dialect === 'sqlite'
+    ? `COALESCE(json_extract(${col}, '$.${field}'), '')`
+    : `COALESCE(${col}->>'${field}', '')`;
 }
 
-function rangeParams(siteId, days, extra = []) {
-  if (siteId && siteId !== 'all') {
-    return {
-      siteClause: 'AND site_id = $1',
-      daysP: '$2',
-      params: [siteId, String(days), ...extra],
-      extraStart: 3,
-    };
+function clickSelect(alias = 'e') {
+  const col = alias ? `${alias}.props` : 'props';
+  if (dialect === 'sqlite') {
+    return `SELECT
+      COALESCE(NULLIF(json_extract(${col}, '$.text'), ''), NULLIF(json_extract(${col}, '$.name'), ''), '(بدون متن)') AS label,
+      COALESCE(json_extract(${col}, '$.href'), '') AS href,
+      COALESCE(json_extract(${col}, '$.outbound'), 0) AS outbound,
+      COUNT(*)::int AS count`;
   }
-  return {
-    siteClause: '',
-    daysP: '$1',
-    params: [String(days), ...extra],
-    extraStart: 2,
-  };
+  return `SELECT
+      COALESCE(NULLIF(${col}->>'text', ''), NULLIF(${col}->>'name', ''), '(بدون متن)') AS label,
+      COALESCE(${col}->>'href', '') AS href,
+      COALESCE(${col}->>'outbound', '0') AS outbound,
+      COUNT(*)::int AS count`;
 }
+
+async function customGoalNamesMap(siteId) {
+  const { rows } =
+    siteId && siteId !== 'all'
+      ? await query('SELECT goal_key, name FROM goals WHERE site_id = $1', [siteId])
+      : await query('SELECT goal_key, name FROM goals');
+  const map = {};
+  for (const r of rows) {
+    if (r.goal_key && r.name) map[r.goal_key] = r.name;
+  }
+  return map;
+}
+
+// —— Sites ——
 
 router.get('/sites', async (_req, res) => {
   try {
@@ -110,65 +129,202 @@ router.delete('/sites/:id', async (req, res) => {
   }
 });
 
+// —— Configurable Goals ——
+
+const GOAL_MATCH_TYPES = new Set([
+  'click_text',
+  'click_selector',
+  'href_contains',
+  'url_contains',
+  'form_submit',
+]);
+
+router.get('/goals', async (req, res) => {
+  try {
+    const siteId = String(req.query.site || 'all').trim();
+    const { rows } =
+      siteId && siteId !== 'all'
+        ? await query(
+            `SELECT g.id, g.site_id, s.name AS site_name, g.name, g.goal_key, g.match_type, g.match_value, g.is_active, g.created_at
+             FROM goals g
+             JOIN sites s ON s.id = g.site_id
+             WHERE g.site_id = $1
+             ORDER BY g.created_at DESC`,
+            [siteId]
+          )
+        : await query(
+            `SELECT g.id, g.site_id, s.name AS site_name, g.name, g.goal_key, g.match_type, g.match_value, g.is_active, g.created_at
+             FROM goals g
+             JOIN sites s ON s.id = g.site_id
+             ORDER BY g.created_at DESC`
+          );
+    res.json({ goals: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+router.post('/goals', async (req, res) => {
+  try {
+    const siteId = String(req.body?.site_id || '').trim();
+    const name = String(req.body?.name || '').trim().slice(0, 80);
+    const matchType = String(req.body?.match_type || 'click_text').trim();
+    const matchValue = String(req.body?.match_value || '').trim().slice(0, 200);
+
+    if (!siteId) return res.status(400).json({ error: 'site_required' });
+    if (!name) return res.status(400).json({ error: 'name_required' });
+    if (!GOAL_MATCH_TYPES.has(matchType)) return res.status(400).json({ error: 'invalid_match_type' });
+    if (!matchValue) return res.status(400).json({ error: 'match_value_required' });
+
+    const { rows: siteRows } = await query('SELECT id FROM sites WHERE id = $1 LIMIT 1', [siteId]);
+    if (!siteRows[0]) return res.status(404).json({ error: 'site_not_found' });
+
+    const id = newId();
+    const rawKey = String(req.body?.goal_key || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '_')
+      .slice(0, 36);
+    const goalKey = rawKey || 'goal_' + id.replace(/-/g, '').slice(0, 8);
+
+    const { rows } = await query(
+      `INSERT INTO goals (id, site_id, name, goal_key, match_type, match_value, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+       RETURNING id, site_id, name, goal_key, match_type, match_value, is_active, created_at`,
+      [id, siteId, name, goalKey, matchType, matchValue]
+    );
+    res.status(201).json({ goal: rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+router.patch('/goals/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const name = req.body?.name != null ? String(req.body.name).trim().slice(0, 80) : null;
+    const matchType =
+      req.body?.match_type != null && GOAL_MATCH_TYPES.has(String(req.body.match_type))
+        ? String(req.body.match_type)
+        : null;
+    const matchValue =
+      req.body?.match_value != null ? String(req.body.match_value).trim().slice(0, 200) : null;
+    const isActive = typeof req.body?.is_active === 'boolean' ? req.body.is_active : null;
+
+    const { rows } = await query(
+      `UPDATE goals SET
+         name = COALESCE($2, name),
+         match_type = COALESCE($3, match_type),
+         match_value = COALESCE($4, match_value),
+         is_active = COALESCE($5, is_active)
+       WHERE id = $1
+       RETURNING id, site_id, name, goal_key, match_type, match_value, is_active, created_at`,
+      [id, name, matchType, matchValue, isActive]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+    res.json({ goal: rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+router.delete('/goals/:id', async (req, res) => {
+  try {
+    const { rowCount } = await query('DELETE FROM goals WHERE id = $1', [req.params.id]);
+    if (!rowCount) return res.status(404).json({ error: 'not_found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// —— Filter options ——
+
+router.get('/stats/filters', async (req, res) => {
+  try {
+    const f = buildFilters(req, { includePath: false });
+    const srcExpr = sourceSqlExpr('p');
+    const sources = await query(
+      `SELECT ${srcExpr} AS source, COUNT(*)::int AS views
+       FROM pageviews p
+       WHERE ${f.pvWhere}
+       GROUP BY 1
+       ORDER BY views DESC
+       LIMIT 40`,
+      f.pvParams
+    );
+    const campaigns = await query(
+      `SELECT p.utm_campaign AS campaign, COUNT(*)::int AS views
+       FROM pageviews p
+       WHERE ${f.pvWhere} AND p.utm_campaign <> ''
+       GROUP BY 1
+       ORDER BY views DESC
+       LIMIT 40`,
+      f.pvParams
+    );
+    res.json({
+      sources: sources.rows,
+      campaigns: campaigns.rows,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// —— Overview & core stats ——
+
 router.get('/stats/overview', async (req, res) => {
   try {
-    const days = parseRange(req);
-    const siteId = req.query.site || 'all';
-    const { siteClause, daysP, params } = rangeParams(siteId, days);
+    const f = buildFilters(req);
 
     const r = await query(
       `SELECT
          COUNT(*)::int AS pageviews,
-         COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions,
-         COUNT(DISTINCT path)::int AS unique_pages,
-         AVG(CASE WHEN duration_ms > 0 THEN duration_ms END) AS avg_ms,
-         AVG(CASE WHEN duration_ms > 0 OR scroll_depth > 0 THEN scroll_depth END) AS avg_scroll,
+         COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
+         COUNT(DISTINCT p.path)::int AS unique_pages,
+         AVG(CASE WHEN p.duration_ms > 0 THEN p.duration_ms END) AS avg_ms,
+         AVG(CASE WHEN p.duration_ms > 0 OR p.scroll_depth > 0 THEN p.scroll_depth END) AS avg_scroll,
          COALESCE(SUM(CASE
-           WHEN utm_source <> '' OR utm_medium <> '' OR utm_campaign <> '' THEN 1
+           WHEN p.utm_source <> '' OR p.utm_medium <> '' OR p.utm_campaign <> '' THEN 1
            ELSE 0
          END), 0)::int AS campaign_views
-       FROM pageviews
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval
-         ${siteClause}`,
-      params
+       FROM pageviews p
+       WHERE ${f.pvWhere}`,
+      f.pvParams
     );
 
     const prev = await query(
       `SELECT COUNT(*)::int AS pageviews
-       FROM pageviews
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval * 2
-         AND created_at < NOW() - (${daysP} || ' days')::interval
-         ${siteClause}`,
-      params
+       FROM pageviews p
+       WHERE ${f.prevWhere}`,
+      f.prevParams
     );
 
     const events = await query(
-      `SELECT COUNT(*)::int AS c FROM events
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval
-         ${siteClause}`,
-      params
+      `SELECT COUNT(*)::int AS c FROM events e WHERE ${f.evWhere}`,
+      f.evParams
     );
 
     const clicks = await query(
-      `SELECT COUNT(*)::int AS c FROM events
-       WHERE name = 'click'
-         AND created_at >= NOW() - (${daysP} || ' days')::interval
-         ${siteClause}`,
-      params
+      `SELECT COUNT(*)::int AS c FROM events e WHERE e.name = 'click' AND ${f.evWhere}`,
+      f.evParams
     );
 
     const conversions = await query(
       `SELECT COUNT(*)::int AS c,
-              COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
-       FROM events
-       WHERE name = 'conversion'
-         AND created_at >= NOW() - (${daysP} || ' days')::interval
-         ${siteClause}`,
-      params
+              COUNT(DISTINCT NULLIF(e.session_id, ''))::int AS sessions
+       FROM events e
+       WHERE e.name = 'conversion' AND ${f.evWhere}`,
+      f.evParams
     );
 
     res.json({
-      days,
+      days: f.range.days,
       ...r.rows[0],
       events: events.rows[0].c,
       clicks: clicks.rows[0].c,
@@ -184,22 +340,44 @@ router.get('/stats/overview', async (req, res) => {
 
 router.get('/stats/timeseries', async (req, res) => {
   try {
-    const days = parseRange(req);
-    const siteId = req.query.site || 'all';
-    const { siteClause, daysP, params } = rangeParams(siteId, days);
+    const f = buildFilters(req);
+    const dExpr = dayExpr('p.created_at');
+    const eDayExpr = dayExpr('e.created_at');
 
-    const { rows } = await query(
-      `SELECT date_trunc('day', created_at AT TIME ZONE 'UTC')::date AS day,
+    const pv = await query(
+      `SELECT ${dExpr} AS day,
               COUNT(*)::int AS pageviews,
-              COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
-       FROM pageviews
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval
-         ${siteClause}
+              COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions
+       FROM pageviews p
+       WHERE ${f.pvWhere}
        GROUP BY 1
        ORDER BY 1 ASC`,
-      params
+      f.pvParams
     );
-    res.json({ days, series: rows });
+
+    const conv = await query(
+      `SELECT ${eDayExpr} AS day,
+              COUNT(*)::int AS conversions
+       FROM events e
+       WHERE e.name = 'conversion' AND ${f.evWhere}
+       GROUP BY 1
+       ORDER BY 1 ASC`,
+      f.evParams
+    );
+
+    const convMap = new Map(conv.rows.map((r) => [String(r.day), Number(r.conversions) || 0]));
+    const series = pv.rows.map((row) => {
+      const day = String(row.day);
+      return {
+        day,
+        jalali: gregorianDayToJalaliStr(day),
+        pageviews: Number(row.pageviews) || 0,
+        sessions: Number(row.sessions) || 0,
+        conversions: convMap.get(day) || 0,
+      };
+    });
+
+    res.json({ days: f.range.days, series });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'server_error' });
@@ -208,24 +386,23 @@ router.get('/stats/timeseries', async (req, res) => {
 
 router.get('/stats/pages', async (req, res) => {
   try {
-    const days = parseRange(req);
-    const siteId = req.query.site || 'all';
-    const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const { siteClause, daysP, params, extraStart } = rangeParams(siteId, days, [limit]);
-    const limP = `$${extraStart}`;
+    const f = buildFilters(req, { includePath: false });
+    const limit = Math.min(Number(req.query.limit) || 25, 100);
+    const limP = `$${f.pvParams.length + 1}`;
 
     const { rows } = await query(
-      `SELECT path,
-              MAX(NULLIF(title, '')) AS title,
+      `SELECT p.path,
+              MAX(NULLIF(p.title, '')) AS title,
               COUNT(*)::int AS views,
-              COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
-       FROM pageviews
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval
-         ${siteClause}
-       GROUP BY path
+              COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
+              AVG(CASE WHEN p.duration_ms > 0 THEN p.duration_ms END) AS avg_ms,
+              AVG(CASE WHEN p.duration_ms > 0 OR p.scroll_depth > 0 THEN p.scroll_depth END) AS avg_scroll
+       FROM pageviews p
+       WHERE ${f.pvWhere}
+       GROUP BY p.path
        ORDER BY views DESC
        LIMIT ${limP}`,
-      params
+      [...f.pvParams, limit]
     );
     res.json({ pages: rows });
   } catch (err) {
@@ -236,22 +413,19 @@ router.get('/stats/pages', async (req, res) => {
 
 router.get('/stats/referrers', async (req, res) => {
   try {
-    const days = parseRange(req);
-    const siteId = req.query.site || 'all';
+    const f = buildFilters(req);
     const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const { siteClause, daysP, params, extraStart } = rangeParams(siteId, days, [limit]);
-    const limP = `$${extraStart}`;
+    const limP = `$${f.pvParams.length + 1}`;
 
     const { rows } = await query(
-      `SELECT COALESCE(NULLIF(referrer_host, ''), '(direct)') AS referrer,
+      `SELECT COALESCE(NULLIF(p.referrer_host, ''), '(direct)') AS referrer,
               COUNT(*)::int AS views
-       FROM pageviews
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval
-         ${siteClause}
+       FROM pageviews p
+       WHERE ${f.pvWhere}
        GROUP BY 1
        ORDER BY views DESC
        LIMIT ${limP}`,
-      params
+      [...f.pvParams, limit]
     );
     res.json({ referrers: rows });
   } catch (err) {
@@ -262,30 +436,25 @@ router.get('/stats/referrers', async (req, res) => {
 
 router.get('/stats/devices', async (req, res) => {
   try {
-    const days = parseRange(req);
-    const siteId = req.query.site || 'all';
-    const { siteClause, daysP, params } = rangeParams(siteId, days);
+    const f = buildFilters(req);
 
     const devices = await query(
-      `SELECT device AS name, COUNT(*)::int AS views
-       FROM pageviews
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}
-       GROUP BY device ORDER BY views DESC`,
-      params
+      `SELECT p.device AS name, COUNT(*)::int AS views
+       FROM pageviews p WHERE ${f.pvWhere}
+       GROUP BY p.device ORDER BY views DESC`,
+      f.pvParams
     );
     const browsers = await query(
-      `SELECT browser AS name, COUNT(*)::int AS views
-       FROM pageviews
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}
-       GROUP BY browser ORDER BY views DESC LIMIT 10`,
-      params
+      `SELECT p.browser AS name, COUNT(*)::int AS views
+       FROM pageviews p WHERE ${f.pvWhere}
+       GROUP BY p.browser ORDER BY views DESC LIMIT 10`,
+      f.pvParams
     );
     const os = await query(
-      `SELECT os AS name, COUNT(*)::int AS views
-       FROM pageviews
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}
-       GROUP BY os ORDER BY views DESC LIMIT 10`,
-      params
+      `SELECT p.os AS name, COUNT(*)::int AS views
+       FROM pageviews p WHERE ${f.pvWhere}
+       GROUP BY p.os ORDER BY views DESC LIMIT 10`,
+      f.pvParams
     );
     res.json({ devices: devices.rows, browsers: browsers.rows, os: os.rows });
   } catch (err) {
@@ -294,94 +463,147 @@ router.get('/stats/devices', async (req, res) => {
   }
 });
 
-function clickSelect() {
-  if (dialect === 'sqlite') {
-    return `SELECT
-      COALESCE(NULLIF(json_extract(props, '$.text'), ''), NULLIF(json_extract(props, '$.name'), ''), '(بدون متن)') AS label,
-      COALESCE(json_extract(props, '$.href'), '') AS href,
-      COALESCE(json_extract(props, '$.outbound'), 0) AS outbound,
-      COUNT(*)::int AS count`;
-  }
-  return `SELECT
-      COALESCE(NULLIF(props->>'text', ''), NULLIF(props->>'name', ''), '(بدون متن)') AS label,
-      COALESCE(props->>'href', '') AS href,
-      COALESCE(props->>'outbound', '0') AS outbound,
-      COUNT(*)::int AS count`;
+// —— Sources breakdown (channels + scroll + duration + conversions) ——
+
+async function computeSources(f, limit = 30) {
+  const srcExpr = sourceSqlExpr('p');
+  const pvLim = `$${f.pvParams.length + 1}`;
+  const pvRows = await query(
+    `SELECT ${srcExpr} AS source,
+            COUNT(*)::int AS views,
+            COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
+            AVG(CASE WHEN p.duration_ms > 0 THEN p.duration_ms END) AS avg_ms,
+            AVG(CASE WHEN p.duration_ms > 0 OR p.scroll_depth > 0 THEN p.scroll_depth END) AS avg_scroll
+     FROM pageviews p
+     WHERE ${f.pvWhere}
+     GROUP BY 1
+     ORDER BY views DESC
+     LIMIT ${pvLim}`,
+    [...f.pvParams, limit]
+  );
+
+  // Attribute session conversions to the first source of each session (or pageview source if matched)
+  const convRows = await query(
+    `SELECT ${srcExpr} AS source,
+            COUNT(DISTINCT e.id)::int AS conversions,
+            COUNT(DISTINCT NULLIF(e.session_id, ''))::int AS converting_sessions
+     FROM events e
+     JOIN pageviews p
+       ON p.site_id = e.site_id
+      AND p.session_id = e.session_id
+      AND p.session_id <> ''
+      AND ${f.pvWhere}
+     WHERE e.name = 'conversion'
+       AND ${f.evWhere.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + f.pvParams.length}`)}
+     GROUP BY 1`,
+    [...f.pvParams, ...f.evParams]
+  );
+
+  const convMap = new Map(convRows.rows.map((r) => [r.source, r]));
+  return pvRows.rows.map((row) => {
+    const conv = convMap.get(row.source) || { conversions: 0, converting_sessions: 0 };
+    const sess = Number(row.sessions) || 0;
+    const converting = Number(conv.converting_sessions) || 0;
+    return {
+      source: row.source,
+      views: Number(row.views) || 0,
+      sessions: sess,
+      avg_ms: row.avg_ms,
+      avg_scroll: row.avg_scroll,
+      conversions: Number(conv.conversions) || 0,
+      converting_sessions: converting,
+      cvr: sess > 0 ? Math.round((converting / sess) * 1000) / 10 : 0,
+    };
+  });
 }
+
+router.get('/stats/sources', async (req, res) => {
+  try {
+    const f = buildFilters(req);
+    const limit = Math.min(Number(req.query.limit) || 30, 100);
+    const sources = await computeSources(f, limit);
+    res.json({ days: f.range.days, sources });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// —— Behavior ——
 
 router.get('/stats/behavior', async (req, res) => {
   try {
-    const days = parseRange(req);
-    const siteId = req.query.site || 'all';
+    const f = buildFilters(req);
     const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const base = rangeParams(siteId, days);
-    const limited = rangeParams(siteId, days, [limit]);
-    const { siteClause, daysP } = base;
-    const limP = `$${limited.extraStart}`;
-    const where = `created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}`;
+    const pvLim = `$${f.pvParams.length + 1}`;
+    const evLim = `$${f.evParams.length + 1}`;
 
     const scroll = await query(
       `SELECT
-         COALESCE(SUM(CASE WHEN scroll_depth < 25 THEN 1 ELSE 0 END), 0)::int AS b0,
-         COALESCE(SUM(CASE WHEN scroll_depth >= 25 AND scroll_depth < 50 THEN 1 ELSE 0 END), 0)::int AS b25,
-         COALESCE(SUM(CASE WHEN scroll_depth >= 50 AND scroll_depth < 75 THEN 1 ELSE 0 END), 0)::int AS b50,
-         COALESCE(SUM(CASE WHEN scroll_depth >= 75 AND scroll_depth < 100 THEN 1 ELSE 0 END), 0)::int AS b75,
-         COALESCE(SUM(CASE WHEN scroll_depth >= 100 THEN 1 ELSE 0 END), 0)::int AS b100
-       FROM pageviews
-       WHERE ${where}`,
-      base.params
+         COALESCE(SUM(CASE WHEN p.scroll_depth < 25 THEN 1 ELSE 0 END), 0)::int AS b0,
+         COALESCE(SUM(CASE WHEN p.scroll_depth >= 25 AND p.scroll_depth < 50 THEN 1 ELSE 0 END), 0)::int AS b25,
+         COALESCE(SUM(CASE WHEN p.scroll_depth >= 50 AND p.scroll_depth < 75 THEN 1 ELSE 0 END), 0)::int AS b50,
+         COALESCE(SUM(CASE WHEN p.scroll_depth >= 75 AND p.scroll_depth < 100 THEN 1 ELSE 0 END), 0)::int AS b75,
+         COALESCE(SUM(CASE WHEN p.scroll_depth >= 100 THEN 1 ELSE 0 END), 0)::int AS b100
+       FROM pageviews p
+       WHERE ${f.pvWhere}`,
+      f.pvParams
     );
 
     const pages = await query(
-      `SELECT path,
-              MAX(NULLIF(title, '')) AS title,
+      `SELECT p.path,
+              MAX(NULLIF(p.title, '')) AS title,
               COUNT(*)::int AS views,
-              AVG(CASE WHEN duration_ms > 0 THEN duration_ms END) AS avg_ms,
-              AVG(CASE WHEN duration_ms > 0 OR scroll_depth > 0 THEN scroll_depth END) AS avg_scroll
-       FROM pageviews
-       WHERE ${where}
-       GROUP BY path
+              COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
+              AVG(CASE WHEN p.duration_ms > 0 THEN p.duration_ms END) AS avg_ms,
+              AVG(CASE WHEN p.duration_ms > 0 OR p.scroll_depth > 0 THEN p.scroll_depth END) AS avg_scroll
+       FROM pageviews p
+       WHERE ${f.pvWhere}
+       GROUP BY p.path
        ORDER BY views DESC
-       LIMIT ${limP}`,
-      limited.params
+       LIMIT ${pvLim}`,
+      [...f.pvParams, limit]
     );
 
     const campaigns = await query(
       `SELECT
-         utm_campaign AS campaign,
-         utm_source AS source,
-         utm_medium AS medium,
-         utm_term AS term,
-         utm_content AS content,
+         p.utm_campaign AS campaign,
+         p.utm_source AS source,
+         p.utm_medium AS medium,
+         p.utm_term AS term,
+         p.utm_content AS content,
          COUNT(*)::int AS views,
-         COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions,
-         AVG(CASE WHEN duration_ms > 0 THEN duration_ms END) AS avg_ms,
-         AVG(CASE WHEN duration_ms > 0 OR scroll_depth > 0 THEN scroll_depth END) AS avg_scroll
-       FROM pageviews
-       WHERE ${where}
-         AND (utm_source <> '' OR utm_medium <> '' OR utm_campaign <> '' OR utm_content <> '' OR utm_term <> '')
-       GROUP BY utm_campaign, utm_source, utm_medium, utm_term, utm_content
+         COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
+         AVG(CASE WHEN p.duration_ms > 0 THEN p.duration_ms END) AS avg_ms,
+         AVG(CASE WHEN p.duration_ms > 0 OR p.scroll_depth > 0 THEN p.scroll_depth END) AS avg_scroll
+       FROM pageviews p
+       WHERE ${f.pvWhere}
+         AND (p.utm_source <> '' OR p.utm_medium <> '' OR p.utm_campaign <> '' OR p.utm_content <> '' OR p.utm_term <> '')
+       GROUP BY p.utm_campaign, p.utm_source, p.utm_medium, p.utm_term, p.utm_content
        ORDER BY views DESC
-       LIMIT ${limP}`,
-      limited.params
+       LIMIT ${pvLim}`,
+      [...f.pvParams, limit]
     );
 
     const clicks = await query(
-      `${clickSelect()}
-       FROM events
-       WHERE name = 'click' AND ${where}
+      `${clickSelect('e')}
+       FROM events e
+       WHERE e.name = 'click' AND ${f.evWhere}
        GROUP BY 1, 2, 3
        ORDER BY count DESC
-       LIMIT ${limP}`,
-      limited.params
+       LIMIT ${evLim}`,
+      [...f.evParams, limit]
     );
 
+    const sources = await computeSources(f, limit);
+
     res.json({
-      days,
+      days: f.range.days,
       scroll: scroll.rows[0] || {},
       pages: pages.rows,
       campaigns: campaigns.rows,
       clicks: clicks.rows,
+      sources,
     });
   } catch (err) {
     console.error(err);
@@ -389,20 +611,183 @@ router.get('/stats/behavior', async (req, res) => {
   }
 });
 
+// —— Single Page Drilldown ——
+
+async function computePageDetail(req) {
+  const rawPath = String(req.query.path || '/').trim();
+  const targetPath = normalizePath(rawPath);
+  const reqWithPath = {
+    query: { ...req.query, path: targetPath },
+  };
+  const f = buildFilters(reqWithPath);
+  const dExpr = dayExpr('p.created_at');
+  const eDayExpr = dayExpr('e.created_at');
+  const goalExpr = eventProp('goal', 'e');
+
+  const summaryRes = await query(
+    `SELECT MAX(NULLIF(p.title, '')) AS title,
+            COUNT(*)::int AS views,
+            COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
+            AVG(CASE WHEN p.duration_ms > 0 THEN p.duration_ms END) AS avg_ms,
+            AVG(CASE WHEN p.duration_ms > 0 OR p.scroll_depth > 0 THEN p.scroll_depth END) AS avg_scroll
+     FROM pageviews p
+     WHERE ${f.pvWhere}`,
+    f.pvParams
+  );
+
+  const convSummary = await query(
+    `SELECT COUNT(*)::int AS conversions,
+            COUNT(DISTINCT NULLIF(e.session_id, ''))::int AS converting_sessions
+     FROM events e
+     WHERE e.name = 'conversion' AND ${f.evWhere}`,
+    f.evParams
+  );
+
+  const clickSummary = await query(
+    `SELECT COUNT(*)::int AS clicks FROM events e WHERE e.name = 'click' AND ${f.evWhere}`,
+    f.evParams
+  );
+
+  const scroll = await query(
+    `SELECT
+       COALESCE(SUM(CASE WHEN p.scroll_depth < 25 THEN 1 ELSE 0 END), 0)::int AS b0,
+       COALESCE(SUM(CASE WHEN p.scroll_depth >= 25 AND p.scroll_depth < 50 THEN 1 ELSE 0 END), 0)::int AS b25,
+       COALESCE(SUM(CASE WHEN p.scroll_depth >= 50 AND p.scroll_depth < 75 THEN 1 ELSE 0 END), 0)::int AS b50,
+       COALESCE(SUM(CASE WHEN p.scroll_depth >= 75 AND p.scroll_depth < 100 THEN 1 ELSE 0 END), 0)::int AS b75,
+       COALESCE(SUM(CASE WHEN p.scroll_depth >= 100 THEN 1 ELSE 0 END), 0)::int AS b100
+     FROM pageviews p
+     WHERE ${f.pvWhere}`,
+    f.pvParams
+  );
+
+  const pvSeries = await query(
+    `SELECT ${dExpr} AS day,
+            COUNT(*)::int AS pageviews,
+            COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions
+     FROM pageviews p
+     WHERE ${f.pvWhere}
+     GROUP BY 1
+     ORDER BY 1 ASC`,
+    f.pvParams
+  );
+
+  const convSeries = await query(
+    `SELECT ${eDayExpr} AS day,
+            COUNT(*)::int AS conversions
+     FROM events e
+     WHERE e.name = 'conversion' AND ${f.evWhere}
+     GROUP BY 1
+     ORDER BY 1 ASC`,
+    f.evParams
+  );
+
+  const convDayMap = new Map(convSeries.rows.map((r) => [String(r.day), Number(r.conversions) || 0]));
+  const series = pvSeries.rows.map((r) => {
+    const day = String(r.day);
+    return {
+      day,
+      jalali: gregorianDayToJalaliStr(day),
+      pageviews: Number(r.pageviews) || 0,
+      sessions: Number(r.sessions) || 0,
+      conversions: convDayMap.get(day) || 0,
+    };
+  });
+
+  const sources = await computeSources(f, 30);
+
+  const campaigns = await query(
+    `SELECT p.utm_campaign AS campaign,
+            p.utm_source AS source,
+            p.utm_medium AS medium,
+            COUNT(*)::int AS views,
+            COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
+            AVG(CASE WHEN p.duration_ms > 0 THEN p.duration_ms END) AS avg_ms,
+            AVG(CASE WHEN p.duration_ms > 0 OR p.scroll_depth > 0 THEN p.scroll_depth END) AS avg_scroll
+     FROM pageviews p
+     WHERE ${f.pvWhere}
+       AND (p.utm_source <> '' OR p.utm_medium <> '' OR p.utm_campaign <> '')
+     GROUP BY 1, 2, 3
+     ORDER BY views DESC
+     LIMIT 30`,
+    f.pvParams
+  );
+
+  const clicks = await query(
+    `${clickSelect('e')}
+     FROM events e
+     WHERE e.name = 'click' AND ${f.evWhere}
+     GROUP BY 1, 2, 3
+     ORDER BY count DESC
+     LIMIT 30`,
+    f.evParams
+  );
+
+  const goalsRaw = await query(
+    `SELECT COALESCE(NULLIF(${goalExpr}, ''), 'goal') AS goal,
+            COUNT(*)::int AS conversions,
+            COUNT(DISTINCT NULLIF(e.session_id, ''))::int AS sessions
+     FROM events e
+     WHERE e.name = 'conversion' AND ${f.evWhere}
+     GROUP BY 1
+     ORDER BY conversions DESC`,
+    f.evParams
+  );
+  const nameMap = await customGoalNamesMap(f.siteId);
+  const goals = goalsRaw.rows.map((g) => ({
+    ...g,
+    goal_name: nameMap[g.goal] || '',
+  }));
+
+  const sRow = summaryRes.rows[0] || {};
+  const sessions = Number(sRow.sessions) || 0;
+  const converting = Number(convSummary.rows[0]?.converting_sessions) || 0;
+
+  return {
+    path: targetPath,
+    title: sRow.title || '',
+    days: f.range.days,
+    summary: {
+      views: Number(sRow.views) || 0,
+      sessions,
+      avg_ms: sRow.avg_ms,
+      avg_scroll: sRow.avg_scroll,
+      clicks: Number(clickSummary.rows[0]?.clicks) || 0,
+      conversions: Number(convSummary.rows[0]?.conversions) || 0,
+      converting_sessions: converting,
+      cvr: sessions > 0 ? Math.round((converting / sessions) * 1000) / 10 : 0,
+    },
+    scroll: scroll.rows[0] || {},
+    series,
+    sources,
+    campaigns: campaigns.rows,
+    clicks: clicks.rows,
+    goals,
+  };
+}
+
+router.get('/stats/page', async (req, res) => {
+  try {
+    const detail = await computePageDetail(req);
+    res.json(detail);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// —— Events & Conversions ——
+
 router.get('/stats/events', async (req, res) => {
   try {
-    const days = parseRange(req);
-    const siteId = req.query.site || 'all';
-    const { siteClause, daysP, params } = rangeParams(siteId, days);
-
+    const f = buildFilters(req);
     const { rows } = await query(
-      `SELECT name, COUNT(*)::int AS count
-       FROM events
-       WHERE created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}
-       GROUP BY name
+      `SELECT e.name, COUNT(*)::int AS count
+       FROM events e
+       WHERE ${f.evWhere}
+       GROUP BY e.name
        ORDER BY count DESC
        LIMIT 50`,
-      params
+      f.evParams
     );
     res.json({ events: rows });
   } catch (err) {
@@ -411,56 +796,47 @@ router.get('/stats/events', async (req, res) => {
   }
 });
 
-function eventProp(field) {
-  return dialect === 'sqlite'
-    ? `COALESCE(json_extract(props, '$.${field}'), '')`
-    : `COALESCE(props->>'${field}', '')`;
-}
-
 router.get('/stats/conversions', async (req, res) => {
   try {
-    const days = parseRange(req);
-    const siteId = req.query.site || 'all';
+    const f = buildFilters(req);
     const limit = Math.min(Number(req.query.limit) || 30, 100);
-    const base = rangeParams(siteId, days);
-    const limited = rangeParams(siteId, days, [limit]);
-    const { siteClause, daysP } = base;
-    const limP = `$${limited.extraStart}`;
-    const where = `created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}`;
-    const goalExpr = eventProp('goal');
-    const sourceExpr = eventProp('source');
-    const mediumExpr = eventProp('medium');
-    const campaignExpr = eventProp('campaign');
+    const pvLim = `$${f.pvParams.length + 1}`;
+    const evLim = `$${f.evParams.length + 1}`;
+    const goalExpr = eventProp('goal', 'e');
+    const sourceExpr = eventProp('source', 'e');
+    const mediumExpr = eventProp('medium', 'e');
+    const campaignExpr = eventProp('campaign', 'e');
+    const eDayExpr = dayExpr('e.created_at');
 
     const totals = await query(
       `SELECT COUNT(*)::int AS conversions,
-              COUNT(DISTINCT NULLIF(session_id, ''))::int AS converting_sessions
-       FROM events
-       WHERE name = 'conversion' AND ${where}`,
-      base.params
+              COUNT(DISTINCT NULLIF(e.session_id, ''))::int AS converting_sessions
+       FROM events e
+       WHERE e.name = 'conversion' AND ${f.evWhere}`,
+      f.evParams
     );
 
     const sessions = await query(
-      `SELECT COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
-       FROM pageviews
-       WHERE ${where}`,
-      base.params
+      `SELECT COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions
+       FROM pageviews p
+       WHERE ${f.pvWhere}`,
+      f.pvParams
     );
 
     const campaignSessions = await query(
       `SELECT
-         utm_campaign AS campaign,
-         utm_source AS source,
-         utm_medium AS medium,
-         COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions,
+         p.utm_campaign AS campaign,
+         p.utm_source AS source,
+         p.utm_medium AS medium,
+         COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
          COUNT(*)::int AS views
-       FROM pageviews
-       WHERE ${where}
-         AND (utm_source <> '' OR utm_medium <> '' OR utm_campaign <> '')
-       GROUP BY utm_campaign, utm_source, utm_medium
+       FROM pageviews p
+       WHERE ${f.pvWhere}
+         AND (p.utm_source <> '' OR p.utm_medium <> '' OR p.utm_campaign <> '')
+       GROUP BY p.utm_campaign, p.utm_source, p.utm_medium
        ORDER BY sessions DESC
-       LIMIT ${limP}`,
-      limited.params
+       LIMIT ${pvLim}`,
+      [...f.pvParams, limit]
     );
 
     const campaignConversions = await query(
@@ -469,38 +845,51 @@ router.get('/stats/conversions', async (req, res) => {
          ${sourceExpr} AS source,
          ${mediumExpr} AS medium,
          COUNT(*)::int AS conversions,
-         COUNT(DISTINCT NULLIF(session_id, ''))::int AS converting_sessions
-       FROM events
-       WHERE name = 'conversion' AND ${where}
+         COUNT(DISTINCT NULLIF(e.session_id, ''))::int AS converting_sessions
+       FROM events e
+       WHERE e.name = 'conversion' AND ${f.evWhere}
        GROUP BY 1, 2, 3
        ORDER BY conversions DESC
-       LIMIT ${limP}`,
-      limited.params
+       LIMIT ${evLim}`,
+      [...f.evParams, limit]
     );
 
-    const goals = await query(
+    const goalsRaw = await query(
       `SELECT
          COALESCE(NULLIF(${goalExpr}, ''), 'goal') AS goal,
          COUNT(*)::int AS conversions,
-         COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
-       FROM events
-       WHERE name = 'conversion' AND ${where}
+         COUNT(DISTINCT NULLIF(e.session_id, ''))::int AS sessions
+       FROM events e
+       WHERE e.name = 'conversion' AND ${f.evWhere}
        GROUP BY 1
        ORDER BY conversions DESC
-       LIMIT ${limP}`,
-      limited.params
+       LIMIT ${evLim}`,
+      [...f.evParams, limit]
     );
 
-    const series = await query(
-      `SELECT date_trunc('day', created_at AT TIME ZONE 'UTC')::date AS day,
+    const nameMap = await customGoalNamesMap(f.siteId);
+    const goals = goalsRaw.rows.map((g) => ({
+      ...g,
+      goal_name: nameMap[g.goal] || '',
+    }));
+
+    const seriesRaw = await query(
+      `SELECT ${eDayExpr} AS day,
               COUNT(*)::int AS conversions,
-              COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
-       FROM events
-       WHERE name = 'conversion' AND ${where}
+              COUNT(DISTINCT NULLIF(e.session_id, ''))::int AS sessions
+       FROM events e
+       WHERE e.name = 'conversion' AND ${f.evWhere}
        GROUP BY 1
        ORDER BY 1 ASC`,
-      base.params
+      f.evParams
     );
+
+    const series = seriesRaw.rows.map((r) => ({
+      day: String(r.day),
+      jalali: gregorianDayToJalaliStr(r.day),
+      conversions: Number(r.conversions) || 0,
+      sessions: Number(r.sessions) || 0,
+    }));
 
     const keyOf = (row) =>
       [row.source || '', row.medium || '', row.campaign || ''].join('\u0001');
@@ -547,14 +936,14 @@ router.get('/stats/conversions', async (req, res) => {
     const convertingSessions = Number(totals.rows[0]?.converting_sessions) || 0;
 
     res.json({
-      days,
+      days: f.range.days,
       conversions: Number(totals.rows[0]?.conversions) || 0,
       converting_sessions: convertingSessions,
       sessions: sessionCount,
       cvr: sessionCount > 0 ? Math.round((convertingSessions / sessionCount) * 1000) / 10 : 0,
-      goals: goals.rows,
+      goals,
       campaigns,
-      series: series.rows,
+      series,
     });
   } catch (err) {
     console.error(err);
@@ -564,57 +953,52 @@ router.get('/stats/conversions', async (req, res) => {
 
 router.get('/stats/journeys', async (req, res) => {
   try {
-    const days = parseRange(req);
-    const siteId = req.query.site || 'all';
+    const f = buildFilters(req);
     const limit = Math.min(Number(req.query.limit) || 25, 80);
-    const base = rangeParams(siteId, days);
-    const { siteClause, daysP } = base;
-    const where = `created_at >= NOW() - (${daysP} || ' days')::interval ${siteClause}`;
 
     const sessions = await query(
-      `SELECT session_id,
-              MIN(created_at) AS started_at,
+      `SELECT p.session_id,
+              MIN(p.created_at) AS started_at,
               COUNT(*)::int AS pages,
-              MAX(utm_source) AS source,
-              MAX(utm_medium) AS medium,
-              MAX(utm_campaign) AS campaign
-       FROM pageviews
-       WHERE ${where}
-         AND session_id <> ''
-       GROUP BY session_id
+              MAX(p.utm_source) AS source,
+              MAX(p.utm_medium) AS medium,
+              MAX(p.utm_campaign) AS campaign
+       FROM pageviews p
+       WHERE ${f.pvWhere}
+         AND p.session_id <> ''
+       GROUP BY p.session_id
        ORDER BY started_at DESC
        LIMIT ${limit}`,
-      [...base.params]
+      [...f.pvParams]
     );
 
     const sidList = sessions.rows.map((r) => r.session_id).filter(Boolean);
     if (!sidList.length) {
-      return res.json({ days, journeys: [], funnels: [] });
+      return res.json({ days: f.range.days, journeys: [], funnels: [] });
     }
 
-    // Fetch paths / conversions for these sessions (chunked IN list).
-    const placeholders = sidList.map((_, i) => `$${base.params.length + i + 1}`).join(',');
-    const sidParams = [...base.params, ...sidList];
-
+    const placeholdersPv = sidList.map((_, i) => `$${f.pvParams.length + i + 1}`).join(',');
     const pageRows = await query(
-      `SELECT session_id, path, title, created_at, utm_source, utm_medium, utm_campaign
-       FROM pageviews
-       WHERE ${where}
-         AND session_id IN (${placeholders})
-       ORDER BY created_at ASC`,
-      sidParams
+      `SELECT p.session_id, p.path, p.title, p.created_at, p.utm_source, p.utm_medium, p.utm_campaign
+       FROM pageviews p
+       WHERE ${f.pvWhere}
+         AND p.session_id IN (${placeholdersPv})
+       ORDER BY p.created_at ASC`,
+      [...f.pvParams, ...sidList]
     );
 
+    const placeholdersEv = sidList.map((_, i) => `$${f.evParams.length + i + 1}`).join(',');
     const convRows = await query(
-      `SELECT session_id, created_at, props
-       FROM events
-       WHERE name = 'conversion'
-         AND ${where}
-         AND session_id IN (${placeholders})
-       ORDER BY created_at ASC`,
-      sidParams
+      `SELECT e.session_id, e.created_at, e.props
+       FROM events e
+       WHERE e.name = 'conversion'
+         AND ${f.evWhere}
+         AND e.session_id IN (${placeholdersEv})
+       ORDER BY e.created_at ASC`,
+      [...f.evParams, ...sidList]
     );
 
+    const nameMap = await customGoalNamesMap(f.siteId);
     const pagesBySid = new Map();
     for (const row of pageRows.rows) {
       if (!pagesBySid.has(row.session_id)) pagesBySid.set(row.session_id, []);
@@ -631,9 +1015,12 @@ router.get('/stats/journeys', async (req, res) => {
           props = {};
         }
       }
+      const goal = props?.goal || 'goal';
       convBySid.get(row.session_id).push({
         at: row.created_at,
-        goal: props?.goal || 'goal',
+        jalali_at: formatTimestampJalali(row.created_at),
+        goal,
+        goal_name: nameMap[goal] || '',
         source: props?.source || '',
         medium: props?.medium || '',
         campaign: props?.campaign || '',
@@ -653,6 +1040,7 @@ router.get('/stats/journeys', async (req, res) => {
       return {
         session_id: s.session_id,
         started_at: s.started_at,
+        started_jalali: formatTimestampJalali(s.started_at),
         pages_count: Number(s.pages) || pages.length,
         source: s.source || tagged?.utm_source || '',
         medium: s.medium || tagged?.utm_medium || '',
@@ -664,7 +1052,6 @@ router.get('/stats/journeys', async (req, res) => {
       };
     });
 
-    // Landing page → conversion funnel (sessions that started on a path).
     const landMap = new Map();
     for (const j of journeys) {
       const landPath = j.landing?.path || '(unknown)';
@@ -689,7 +1076,188 @@ router.get('/stats/journeys', async (req, res) => {
       .sort((a, b) => b.sessions - a.sessions || b.converted - a.converted)
       .slice(0, 30);
 
-    res.json({ days, journeys, funnels });
+    res.json({ days: f.range.days, journeys, funnels });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// —— Excel-friendly CSV Export (UTF-8 BOM) ——
+
+function csvEscape(val) {
+  const s = String(val ?? '');
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function toCsv(headers, rows) {
+  const lines = [headers.map(csvEscape).join(',')];
+  for (const row of rows) {
+    lines.push(row.map(csvEscape).join(','));
+  }
+  return '\uFEFF' + lines.join('\r\n');
+}
+
+function fmtSec(ms) {
+  if (ms == null || ms === '') return '0';
+  return String(Math.round(Number(ms || 0) / 1000));
+}
+
+function fmtPct(v) {
+  if (v == null || v === '') return '0';
+  return String(Math.round(Number(v || 0)));
+}
+
+router.get('/export.csv', async (req, res) => {
+  try {
+    const report = String(req.query.report || 'pages').trim();
+    const f = buildFilters(req);
+    let csv = '';
+
+    if (report === 'sources') {
+      const rows = await computeSources(f, 500);
+      csv = toCsv(
+        ['منبع', 'بازدید', 'نشست', 'میانگین زمان (ثانیه)', 'میانگین اسکرول (%)', 'تبدیل', 'نرخ تبدیل (%)'],
+        rows.map((r) => [
+          r.source,
+          r.views,
+          r.sessions,
+          fmtSec(r.avg_ms),
+          fmtPct(r.avg_scroll),
+          r.converting_sessions,
+          r.cvr,
+        ])
+      );
+    } else if (report === 'campaigns') {
+      const { rows } = await query(
+        `SELECT p.utm_campaign AS campaign,
+                p.utm_source AS source,
+                p.utm_medium AS medium,
+                p.utm_term AS term,
+                p.utm_content AS content,
+                COUNT(*)::int AS views,
+                COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
+                AVG(CASE WHEN p.duration_ms > 0 THEN p.duration_ms END) AS avg_ms,
+                AVG(CASE WHEN p.duration_ms > 0 OR p.scroll_depth > 0 THEN p.scroll_depth END) AS avg_scroll
+         FROM pageviews p
+         WHERE ${f.pvWhere}
+           AND (p.utm_source <> '' OR p.utm_medium <> '' OR p.utm_campaign <> '')
+         GROUP BY 1, 2, 3, 4, 5
+         ORDER BY views DESC
+         LIMIT 500`,
+        f.pvParams
+      );
+      csv = toCsv(
+        ['کمپین', 'منبع', 'مدیوم', 'کلیدواژه', 'محتوا', 'بازدید', 'نشست', 'زمان (ثانیه)', 'اسکرول (%)'],
+        rows.map((r) => [
+          r.campaign,
+          r.source,
+          r.medium,
+          r.term,
+          r.content,
+          r.views,
+          r.sessions,
+          fmtSec(r.avg_ms),
+          fmtPct(r.avg_scroll),
+        ])
+      );
+    } else if (report === 'clicks') {
+      const { rows } = await query(
+        `${clickSelect('e')}
+         FROM events e
+         WHERE e.name = 'click' AND ${f.evWhere}
+         GROUP BY 1, 2, 3
+         ORDER BY count DESC
+         LIMIT 500`,
+        f.evParams
+      );
+      csv = toCsv(
+        ['عنوان دکمه/لینک', 'آدرس مقصد', 'خروجی', 'تعداد کلیک'],
+        rows.map((r) => [r.label, r.href, Number(r.outbound) === 1 ? 'بله' : 'خیر', r.count])
+      );
+    } else if (report === 'page_detail') {
+      const detail = await computePageDetail(req);
+      csv = toCsv(
+        ['صفحه', 'منبع ورودی', 'بازدید', 'نشست', 'میانگین زمان (ثانیه)', 'میانگین اسکرول (%)', 'تبدیل', 'نرخ تبدیل (%)'],
+        detail.sources.map((s) => [
+          detail.path,
+          s.source,
+          s.views,
+          s.sessions,
+          fmtSec(s.avg_ms),
+          fmtPct(s.avg_scroll),
+          s.converting_sessions,
+          s.cvr,
+        ])
+      );
+    } else if (report === 'conversions') {
+      const goalExpr = eventProp('goal', 'e');
+      const sourceExpr = eventProp('source', 'e');
+      const mediumExpr = eventProp('medium', 'e');
+      const campaignExpr = eventProp('campaign', 'e');
+      const hrefExpr = eventProp('href', 'e');
+      const textExpr = eventProp('text', 'e');
+      const nameMap = await customGoalNamesMap(f.siteId);
+      const { rows } = await query(
+        `SELECT e.created_at, e.path, e.session_id,
+                ${goalExpr} AS goal,
+                ${sourceExpr} AS source,
+                ${mediumExpr} AS medium,
+                ${campaignExpr} AS campaign,
+                ${textExpr} AS text,
+                ${hrefExpr} AS href
+         FROM events e
+         WHERE e.name = 'conversion' AND ${f.evWhere}
+         ORDER BY e.created_at DESC
+         LIMIT 1000`,
+        f.evParams
+      );
+      csv = toCsv(
+        ['تاریخ شمسی', 'هدف', 'صفحه', 'منبع', 'مدیوم', 'کمپین', 'متن/برچسب', 'لینک', 'نشست'],
+        rows.map((r) => [
+          formatTimestampJalali(r.created_at),
+          nameMap[r.goal] || r.goal,
+          r.path,
+          r.source,
+          r.medium,
+          r.campaign,
+          r.text,
+          r.href,
+          r.session_id,
+        ])
+      );
+    } else {
+      const { rows } = await query(
+        `SELECT p.path,
+                MAX(NULLIF(p.title, '')) AS title,
+                COUNT(*)::int AS views,
+                COUNT(DISTINCT NULLIF(p.session_id, ''))::int AS sessions,
+                AVG(CASE WHEN p.duration_ms > 0 THEN p.duration_ms END) AS avg_ms,
+                AVG(CASE WHEN p.duration_ms > 0 OR p.scroll_depth > 0 THEN p.scroll_depth END) AS avg_scroll
+         FROM pageviews p
+         WHERE ${f.pvWhere}
+         GROUP BY p.path
+         ORDER BY views DESC
+         LIMIT 500`,
+        f.pvParams
+      );
+      csv = toCsv(
+        ['عنوان صفحه', 'مسیر', 'بازدید', 'نشست', 'میانگین زمان (ثانیه)', 'میانگین اسکرول (%)'],
+        rows.map((r) => [
+          r.title || '',
+          r.path,
+          r.views,
+          r.sessions,
+          fmtSec(r.avg_ms),
+          fmtPct(r.avg_scroll),
+        ])
+      );
+    }
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="iran-analytics-${report}.csv"`);
+    res.send(csv);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'server_error' });

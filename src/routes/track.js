@@ -17,9 +17,30 @@ function cors(res) {
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
-router.options(['/collect', '/e.gif'], (req, res) => {
+router.options(['/collect', '/e.gif', '/site-goals'], (req, res) => {
   cors(res);
   res.status(204).end();
+});
+
+router.get('/site-goals', async (req, res) => {
+  cors(res);
+  res.setHeader('Cache-Control', 'public, max-age=30');
+  try {
+    const key = cleanToken(req.query?.k || req.query?.site || '', 64);
+    const site = await resolveSite(key);
+    if (!site) return res.json({ goals: [] });
+    const { rows } = await query(
+      `SELECT goal_key, name, match_type, match_value
+       FROM goals
+       WHERE site_id = $1 AND is_active = TRUE
+       ORDER BY created_at ASC`,
+      [site.id]
+    );
+    res.json({ goals: rows });
+  } catch (err) {
+    console.error('site-goals error', err);
+    res.json({ goals: [] });
+  }
 });
 
 async function resolveSite(publicKey) {

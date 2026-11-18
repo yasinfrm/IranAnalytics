@@ -4,18 +4,46 @@
   const loginForm = document.getElementById('login-form');
   const loginError = document.getElementById('login-error');
   const logoutBtn = document.getElementById('logout-btn');
-  const siteFilter = document.getElementById('site-filter');
-  const daysFilter = document.getElementById('days-filter');
-  const siteFilterB = document.getElementById('site-filter-b');
-  const daysFilterB = document.getElementById('days-filter-b');
-  const siteFilterC = document.getElementById('site-filter-c');
-  const daysFilterC = document.getElementById('days-filter-c');
+
+  const globalFilterBar = document.getElementById('global-filter-bar');
+  const fSite = document.getElementById('f-site');
+  const fSource = document.getElementById('f-source');
+  const fCampaign = document.getElementById('f-campaign');
+  const fResetBtn = document.getElementById('f-reset-btn');
+  const exportType = document.getElementById('export-report-type');
+  const exportBtn = document.getElementById('export-btn');
+  const filterSummary = document.getElementById('active-filter-summary');
+
   const sitesList = document.getElementById('sites-list');
   const modalRoot = document.getElementById('modal-root');
   const addSiteBtn = document.getElementById('add-site-btn');
 
+  const goalForm = document.getElementById('goal-form');
+  const goalSite = document.getElementById('goal-site');
+  const goalFormErr = document.getElementById('goal-form-error');
+  const goalsList = document.getElementById('goals-list');
+
   let sites = [];
   let origin = location.origin;
+  let currentView = 'dashboard';
+  let prevView = 'dashboard';
+  let currentPagePath = '';
+
+  const today = IAJalali.todayJalali();
+  const initialFrom = IAJalali.addJalaliDays(today, -6);
+  let dateRange = {
+    from: IAJalali.formatStr(initialFrom),
+    to: IAJalali.formatStr(today),
+  };
+
+  const picker = IAJalali.createRangePicker(
+    document.getElementById('f-jalali-mount'),
+    { from: initialFrom, to: today },
+    (next) => {
+      dateRange = next;
+      refreshFilterChoices().then(reloadCurrentView);
+    }
+  );
 
   async function api(path, options = {}) {
     const res = await fetch(path, {
@@ -46,156 +74,6 @@
     return Number(n || 0).toLocaleString('fa-IR');
   }
 
-  function showLogin() {
-    loginView.classList.remove('hidden');
-    appView.classList.add('hidden');
-  }
-
-  function showApp() {
-    loginView.classList.add('hidden');
-    appView.classList.remove('hidden');
-  }
-
-  function setView(name) {
-    document.querySelectorAll('.nav button').forEach((b) => {
-      b.classList.toggle('active', b.dataset.view === name);
-    });
-    document.getElementById('view-dashboard').classList.toggle('hidden', name !== 'dashboard');
-    document.getElementById('view-behavior').classList.toggle('hidden', name !== 'behavior');
-    document.getElementById('view-conversions').classList.toggle('hidden', name !== 'conversions');
-    document.getElementById('view-sites').classList.toggle('hidden', name !== 'sites');
-    if (name === 'sites') renderSites();
-    if (name === 'dashboard') loadDashboard();
-    if (name === 'behavior') loadBehavior();
-    if (name === 'conversions') loadConversions();
-  }
-
-  document.querySelectorAll('.nav button').forEach((btn) => {
-    btn.addEventListener('click', () => setView(btn.dataset.view));
-  });
-
-  loginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    loginError.textContent = '';
-    try {
-      // Must be /auth/login (or /api/login alias) — not a protected /api/* route.
-      const res = await fetch('/auth/login', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: document.getElementById('username').value,
-          password: document.getElementById('password').value,
-        }),
-      });
-      const text = await res.text();
-      let data = null;
-      try {
-        data = text ? JSON.parse(text) : null;
-      } catch {
-        data = null;
-      }
-      if (!res.ok) {
-        if (data && data.error === 'invalid_credentials') {
-          throw new Error('bad_password');
-        }
-        throw new Error('login_failed');
-      }
-      showApp();
-      await bootstrap();
-    } catch (err) {
-      if (err && err.message === 'bad_password') {
-        loginError.textContent =
-          'نام کاربری یا رمز عبور نادرست است. رمز را با ADMIN_PASSWORD در /etc/iran-analytics.env یکی کنید.';
-      } else {
-        loginError.textContent =
-          'ورود انجام نشد. اگر سایت با HTTPS است COOKIE_SECURE=true و TRUST_PROXY=true باشد، بعد سرویس را ری‌استارت کنید.';
-      }
-    }
-  });
-
-  logoutBtn.addEventListener('click', async () => {
-    try {
-      await api('/auth/logout', { method: 'POST', body: '{}' });
-    } catch {
-      /* ignore */
-    }
-    showLogin();
-  });
-
-  function syncFilters(source) {
-    const site = source.value;
-    [siteFilter, siteFilterB, siteFilterC].forEach((el) => {
-      if (el && el !== source) el.value = site;
-    });
-  }
-  function syncDays(source) {
-    const days = source.value;
-    [daysFilter, daysFilterB, daysFilterC].forEach((el) => {
-      if (el && el !== source) el.value = days;
-    });
-  }
-
-  siteFilter.addEventListener('change', () => {
-    syncFilters(siteFilter);
-    loadDashboard();
-  });
-  daysFilter.addEventListener('change', () => {
-    syncDays(daysFilter);
-    loadDashboard();
-  });
-  siteFilterB.addEventListener('change', () => {
-    syncFilters(siteFilterB);
-    loadBehavior();
-  });
-  daysFilterB.addEventListener('change', () => {
-    syncDays(daysFilterB);
-    loadBehavior();
-  });
-  siteFilterC.addEventListener('change', () => {
-    syncFilters(siteFilterC);
-    loadConversions();
-  });
-  daysFilterC.addEventListener('change', () => {
-    syncDays(daysFilterC);
-    loadConversions();
-  });
-  addSiteBtn.addEventListener('click', () => openSiteModal());
-
-  function fillSiteFilter() {
-    const current = siteFilter.value || 'all';
-    const options =
-      `<option value="all">همه سایت‌ها</option>` +
-      sites
-        .map(
-          (s) =>
-            `<option value="${s.id}">${escapeHtml(s.name)}${s.domain ? ' — ' + escapeHtml(s.domain) : ''}</option>`
-        )
-        .join('');
-    siteFilter.innerHTML = options;
-    siteFilterB.innerHTML = options;
-    siteFilterC.innerHTML = options;
-    const next = sites.some((s) => s.id === current) ? current : 'all';
-    siteFilter.value = next;
-    const pick = (el) =>
-      el.value && (el.value === 'all' || sites.some((s) => s.id === el.value)) ? el.value : next;
-    siteFilterB.value = pick(siteFilterB);
-    siteFilterC.value = pick(siteFilterC);
-  }
-
-  function goalLabel(name) {
-    const map = {
-      contact_phone: 'تماس تلفنی',
-      contact_email: 'ایمیل',
-      contact_whatsapp: 'واتساپ',
-      consultation: 'صفحه مشاوره',
-      consultation_cta: 'دکمه مشاوره/تماس',
-      form_consultation: 'ارسال فرم مشاوره',
-      form_lead: 'ارسال فرم سرنخ',
-    };
-    return map[name] || name || 'هدف';
-  }
-
   function faDuration(ms) {
     const s = Math.max(0, Math.round(Number(ms || 0) / 1000));
     if (s < 60) return faNum(s) + ' ثانیه';
@@ -206,11 +84,11 @@
   }
 
   function faPct(n) {
-    return faNum(Math.round(Number(n || 0))) + '٪';
+    return faNum(Math.round(Number(n || 0) * 10) / 10) + '٪';
   }
 
   function escapeHtml(str) {
-    return String(str)
+    return String(str ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -242,6 +120,266 @@
     return { main: path, sub: '' };
   }
 
+  function sourceLabel(src) {
+    const map = {
+      google: 'گوگل',
+      yektanet: 'یکتانت',
+      instagram: 'اینستاگرام',
+      telegram: 'تلگرام',
+      direct: 'ورود مستقیم',
+      '(direct)': 'ورود مستقیم',
+      bing: 'بینگ',
+      aparat: 'آپارات',
+      torob: 'ترب',
+    };
+    return map[String(src || '').toLowerCase()] || src || 'نامشخص';
+  }
+
+  function goalLabel(name, customName) {
+    if (customName) return customName;
+    const map = {
+      contact_phone: 'تماس تلفنی',
+      contact_email: 'ایمیل',
+      contact_whatsapp: 'واتساپ',
+      consultation: 'صفحه مشاوره',
+      consultation_cta: 'دکمه مشاوره/تماس',
+      form_consultation: 'ارسال فرم مشاوره',
+      form_lead: 'ارسال فرم سرنخ',
+    };
+    return map[name] || name || 'هدف';
+  }
+
+  function deviceLabel(name) {
+    const map = {
+      desktop: 'دسکتاپ',
+      mobile: 'موبایل',
+      tablet: 'تبلت',
+      smarttv: 'تلویزیون',
+    };
+    return map[name] || name || 'نامشخص';
+  }
+
+  function matchTypeLabel(t) {
+    const map = {
+      click_text: 'متن کلیک',
+      href_contains: 'آدرس لینک',
+      url_contains: 'آدرس صفحه',
+      click_selector: 'سلکتور CSS',
+      form_submit: 'ارسال فرم',
+    };
+    return map[t] || t;
+  }
+
+  function filterQuery(extra = {}) {
+    const params = new URLSearchParams();
+    params.set('site', fSite.value || 'all');
+    params.set('from', dateRange.from);
+    params.set('to', dateRange.to);
+    if (fSource.value && fSource.value !== 'all') params.set('source', fSource.value);
+    if (fCampaign.value && fCampaign.value !== 'all') params.set('campaign', fCampaign.value);
+    for (const [k, v] of Object.entries(extra)) {
+      if (v != null && v !== '') params.set(k, String(v));
+    }
+    return params.toString();
+  }
+
+  function updateFilterUI() {
+    const hasCustom =
+      (fSource.value && fSource.value !== 'all') ||
+      (fCampaign.value && fCampaign.value !== 'all');
+    fResetBtn.classList.toggle('hidden', !hasCustom);
+
+    const bits = [`${IAJalali.toFaDigits(dateRange.from)} تا ${IAJalali.toFaDigits(dateRange.to)}`];
+    if (fSource.value && fSource.value !== 'all') bits.push(`منبع: ${sourceLabel(fSource.value)}`);
+    if (fCampaign.value && fCampaign.value !== 'all') bits.push(`کمپین: ${fCampaign.value}`);
+    filterSummary.textContent = bits.join(' · ');
+  }
+
+  function showLogin() {
+    loginView.classList.remove('hidden');
+    appView.classList.add('hidden');
+  }
+
+  function showApp() {
+    loginView.classList.add('hidden');
+    appView.classList.remove('hidden');
+  }
+
+  function setView(name) {
+    if (name !== 'page' && currentView !== 'page') {
+      prevView = currentView;
+    }
+    currentView = name;
+    document.querySelectorAll('.nav button').forEach((b) => {
+      const target = name === 'page' ? prevView : name;
+      b.classList.toggle('active', b.dataset.view === target);
+    });
+    const showFilters = name !== 'sites' && name !== 'goals';
+    globalFilterBar.classList.toggle('hidden', !showFilters);
+
+    document.getElementById('view-dashboard').classList.toggle('hidden', name !== 'dashboard');
+    document.getElementById('view-behavior').classList.toggle('hidden', name !== 'behavior');
+    document.getElementById('view-page').classList.toggle('hidden', name !== 'page');
+    document.getElementById('view-conversions').classList.toggle('hidden', name !== 'conversions');
+    document.getElementById('view-goals').classList.toggle('hidden', name !== 'goals');
+    document.getElementById('view-sites').classList.toggle('hidden', name !== 'sites');
+
+    if (name === 'behavior') exportType.value = 'sources';
+    else if (name === 'conversions') exportType.value = 'conversions';
+    else if (name === 'dashboard') exportType.value = 'pages';
+
+    reloadCurrentView();
+  }
+
+  function reloadCurrentView() {
+    updateFilterUI();
+    if (currentView === 'dashboard') loadDashboard();
+    else if (currentView === 'behavior') loadBehavior();
+    else if (currentView === 'page') loadPageDetail(currentPagePath);
+    else if (currentView === 'conversions') loadConversions();
+    else if (currentView === 'goals') loadGoals();
+    else if (currentView === 'sites') renderSites();
+  }
+
+  function openPageDetail(path) {
+    if (!path) return;
+    if (currentView !== 'page') prevView = currentView;
+    currentPagePath = path;
+    setView('page');
+  }
+
+  document.querySelectorAll('.nav button').forEach((btn) => {
+    btn.addEventListener('click', () => setView(btn.dataset.view));
+  });
+
+  document.getElementById('page-back-btn').addEventListener('click', () => {
+    setView(prevView || 'dashboard');
+  });
+
+  fSite.addEventListener('change', () => refreshFilterChoices().then(reloadCurrentView));
+  fSource.addEventListener('change', reloadCurrentView);
+  fCampaign.addEventListener('change', reloadCurrentView);
+  fResetBtn.addEventListener('click', () => {
+    fSource.value = 'all';
+    fCampaign.value = 'all';
+    reloadCurrentView();
+  });
+
+  exportBtn.addEventListener('click', () => {
+    const rep = exportType.value || 'pages';
+    location.href = `/api/export.csv?${filterQuery({ report: rep })}`;
+  });
+
+  document.getElementById('page-export-btn').addEventListener('click', () => {
+    if (!currentPagePath) return;
+    location.href = `/api/export.csv?${filterQuery({ report: 'page_detail', path: currentPagePath })}`;
+  });
+
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    loginError.textContent = '';
+    try {
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value,
+        }),
+      });
+      const text = await res.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null;
+      }
+      if (!res.ok) {
+        if (data && data.error === 'invalid_credentials') throw new Error('bad_password');
+        throw new Error('login_failed');
+      }
+      showApp();
+      await bootstrap();
+    } catch (err) {
+      loginError.textContent =
+        err && err.message === 'bad_password'
+          ? 'نام کاربری یا رمز عبور نادرست است. رمز را با ADMIN_PASSWORD در /etc/iran-analytics.env یکی کنید.'
+          : 'ورود انجام نشد. اگر سایت با HTTPS است COOKIE_SECURE=true و TRUST_PROXY=true باشد، بعد سرویس را ری‌استارت کنید.';
+    }
+  });
+
+  logoutBtn.addEventListener('click', async () => {
+    try {
+      await api('/auth/logout', { method: 'POST', body: '{}' });
+    } catch {
+      /* ignore */
+    }
+    showLogin();
+  });
+
+  addSiteBtn.addEventListener('click', () => openSiteModal());
+
+  function fillSiteSelectors() {
+    const current = fSite.value || 'all';
+    const options =
+      `<option value="all">همه سایت‌ها</option>` +
+      sites
+        .map(
+          (s) =>
+            `<option value="${s.id}">${escapeHtml(s.name)}${s.domain ? ' — ' + escapeHtml(s.domain) : ''}</option>`
+        )
+        .join('');
+    fSite.innerHTML = options;
+    fSite.value = sites.some((s) => s.id === current) ? current : 'all';
+
+    const curGoalSite = goalSite.value;
+    goalSite.innerHTML = sites.length
+      ? sites
+          .map(
+            (s) =>
+              `<option value="${s.id}">${escapeHtml(s.name)}${s.domain ? ' — ' + escapeHtml(s.domain) : ''}</option>`
+          )
+          .join('')
+      : '<option value="">ابتدا سایت بسازید</option>';
+    if (sites.some((s) => s.id === curGoalSite)) goalSite.value = curGoalSite;
+  }
+
+  async function refreshFilterChoices() {
+    try {
+      const q = `site=${encodeURIComponent(fSite.value || 'all')}&from=${encodeURIComponent(
+        dateRange.from
+      )}&to=${encodeURIComponent(dateRange.to)}`;
+      const data = await api(`/api/stats/filters?${q}`);
+      const curSrc = fSource.value || 'all';
+      const curCamp = fCampaign.value || 'all';
+
+      const srcList = data.sources || [];
+      fSource.innerHTML =
+        `<option value="all">همه منابع</option>` +
+        srcList
+          .map(
+            (s) =>
+              `<option value="${escapeHtml(s.source)}">${escapeHtml(sourceLabel(s.source))} (${faNum(s.views)})</option>`
+          )
+          .join('');
+      fSource.value = srcList.some((s) => s.source === curSrc) ? curSrc : 'all';
+
+      const campList = data.campaigns || [];
+      fCampaign.innerHTML =
+        `<option value="all">همه کمپین‌ها</option>` +
+        campList
+          .map(
+            (c) =>
+              `<option value="${escapeHtml(c.campaign)}">${escapeHtml(c.campaign)} (${faNum(c.views)})</option>`
+          )
+          .join('');
+      fCampaign.value = campList.some((c) => c.campaign === curCamp) ? curCamp : 'all';
+    } catch {
+      /* keep current */
+    }
+  }
+
   function embedSnippet(publicKey) {
     return `<script defer src="${origin}/t.js" data-site="${publicKey}" data-api="${origin}" data-no-optimize="1" data-no-minify="1"><\/script>`;
   }
@@ -252,42 +390,117 @@
 
   function renderRankTable(el, rows, labelKey, valueKey, opts = {}) {
     if (!rows.length) {
-      el.innerHTML = '<p class="empty">داده‌ای نیست.</p>';
+      el.innerHTML = '<p class="empty">داده‌ای در این بازه نیست.</p>';
       return;
     }
-    const max = Math.max(...rows.map((r) => r[valueKey] || 0), 1);
+    const max = Math.max(...rows.map((r) => Number(r[valueKey]) || 0), 1);
     el.innerHTML = `<table class="table"><thead><tr><th>عنوان</th><th>تعداد</th></tr></thead><tbody>${rows
       .map((r) => {
-        const pct = Math.max(8, Math.round(((r[valueKey] || 0) / max) * 100));
+        const pct = Math.max(8, Math.round(((Number(r[valueKey]) || 0) / max) * 100));
         let main = r[labelKey];
         let sub = '';
         if (opts.asPages) {
           const label = pageLabel(r);
           main = label.main;
           sub = label.sub;
-        } else if (opts.prettyPath) {
-          main = prettyPath(main);
         }
-        return `<tr>
-          <td>${escapeHtml(main)}${sub ? `<span class="cell-sub" dir="ltr">${escapeHtml(sub)}</span>` : ''}</td>
+        const clickable = opts.onClickPath ? ` class="link-row" data-open-page="${escapeHtml(r.path)}"` : '';
+        return `<tr${clickable}>
+          <td><span class="${opts.onClickPath ? 'link-title' : ''}">${escapeHtml(main)}</span>${
+            sub ? `<span class="cell-sub" dir="ltr">${escapeHtml(sub)}</span>` : ''
+          }</td>
           <td><div class="bar-cell"><span>${faNum(r[valueKey])}</span><span class="bar" style="width:${pct}%"></span></div></td>
+        </tr>`;
+      })
+      .join('')}</tbody></table>`;
+
+    if (opts.onClickPath) {
+      el.querySelectorAll('[data-open-page]').forEach((tr) => {
+        tr.addEventListener('click', () => openPageDetail(tr.dataset.openPage));
+      });
+    }
+  }
+
+  function renderSourcesTable(el, sources) {
+    if (!sources.length) {
+      el.innerHTML = '<p class="empty">داده‌ای برای منابع نیست.</p>';
+      return;
+    }
+    el.innerHTML = `<table class="table wide"><thead><tr>
+      <th>منبع</th><th>بازدید</th><th>نشست</th><th>زمان فعال</th><th>اسکرول</th><th>تبدیل</th><th>نرخ</th>
+    </tr></thead><tbody>${sources
+      .map((s) => {
+        const timed = Number(s.avg_ms) > 0;
+        const scrolled = s.avg_scroll != null && s.avg_scroll !== '' && Number.isFinite(Number(s.avg_scroll));
+        return `<tr>
+          <td><strong>${escapeHtml(sourceLabel(s.source))}</strong><span class="cell-sub" dir="ltr">${escapeHtml(s.source)}</span></td>
+          <td>${faNum(s.views)}</td>
+          <td>${faNum(s.sessions)}</td>
+          <td>${timed ? faDuration(s.avg_ms) : '—'}</td>
+          <td>${scrolled ? faPct(s.avg_scroll) : '—'}</td>
+          <td>${faNum(s.converting_sessions || 0)}</td>
+          <td>${faPct(s.cvr || 0)}</td>
+        </tr>`;
+      })
+      .join('')}</tbody></table>`;
+  }
+
+  function renderClicksTable(el, clicks) {
+    if (!clicks.length) {
+      el.innerHTML = '<p class="empty">هنوز کلیکی ثبت نشده.</p>';
+      return;
+    }
+    const maxClick = Math.max(...clicks.map((c) => Number(c.count) || 0), 1);
+    el.innerHTML = `<table class="table"><thead><tr><th>عنصر</th><th>تعداد</th></tr></thead><tbody>${clicks
+      .map((row) => {
+        const pct = Math.max(8, Math.round((Number(row.count) / maxClick) * 100));
+        const href = row.href ? String(row.href) : '';
+        const outbound = Number(row.outbound) === 1;
+        const sub = href
+          ? `<span class="cell-sub" dir="ltr">${escapeHtml(href)}${outbound ? ' · خروجی' : ''}</span>`
+          : '';
+        return `<tr>
+          <td>${escapeHtml(row.label || 'بدون متن')}${sub}</td>
+          <td><div class="bar-cell"><span>${faNum(row.count)}</span><span class="bar" style="width:${pct}%"></span></div></td>
+        </tr>`;
+      })
+      .join('')}</tbody></table>`;
+  }
+
+  function renderCampaignsTable(el, campaigns) {
+    if (!campaigns.length) {
+      el.innerHTML = '<p class="empty">هنوز ورودی کمپینی ثبت نشده.</p>';
+      return;
+    }
+    el.innerHTML = `<table class="table wide"><thead><tr>
+      <th>کمپین</th><th>بازدید</th><th>نشست</th><th>زمان</th><th>اسکرول</th>
+    </tr></thead><tbody>${campaigns
+      .map((row) => {
+        const title = row.campaign || row.source || row.medium || 'کمپین بدون نام';
+        const bits = [];
+        if (row.campaign && row.source) bits.push(sourceLabel(row.source));
+        if (row.medium) bits.push(row.medium);
+        if (row.term) bits.push(row.term);
+        const sub = bits.join(' · ');
+        return `<tr>
+          <td>${escapeHtml(title)}${sub ? `<span class="cell-sub">${escapeHtml(sub)}</span>` : ''}</td>
+          <td>${faNum(row.views)}</td>
+          <td>${faNum(row.sessions)}</td>
+          <td>${row.avg_ms == null ? '—' : faDuration(row.avg_ms)}</td>
+          <td>${row.avg_scroll == null ? '—' : faPct(row.avg_scroll)}</td>
         </tr>`;
       })
       .join('')}</tbody></table>`;
   }
 
   async function loadDashboard() {
-    const site = siteFilter.value || 'all';
-    const days = daysFilter.value || '7';
-    const q = `site=${encodeURIComponent(site)}&days=${encodeURIComponent(days)}`;
-
-    const [overview, series, pages, referrers, devices, events] = await Promise.all([
+    const q = filterQuery();
+    const [overview, series, pages, devices, sourcesRes] = await Promise.all([
       api(`/api/stats/overview?${q}`),
       api(`/api/stats/timeseries?${q}`),
       api(`/api/stats/pages?${q}`),
-      api(`/api/stats/referrers?${q}`),
       api(`/api/stats/devices?${q}`),
-      api(`/api/stats/events?${q}`),
+      api(`/api/stats/sources?${q}&limit=8`),
     ]);
 
     document.getElementById('stat-pageviews').textContent = faNum(overview.pageviews);
@@ -299,6 +512,7 @@
     document.getElementById('stat-clicks').textContent = faNum(overview.clicks);
     document.getElementById('stat-campaigns').textContent = faNum(overview.campaign_views);
     document.getElementById('stat-conversions').textContent = faNum(overview.conversions);
+
     const sess = Number(overview.sessions) || 0;
     const converting = Number(overview.converting_sessions) || 0;
     const cvr = sess > 0 ? Math.round((converting / sess) * 1000) / 10 : 0;
@@ -320,11 +534,23 @@
       deltaEl.className = 'stat-delta ' + (pct >= 0 ? 'up' : 'down');
     }
 
-    const chartPoints = (series.series || []).map((row) => {
-      const d = String(row.day).slice(5, 10);
-      return { label: d, y: row.pageviews };
+    const chartPoints = (series.series || []).map((row) => ({
+      label: IAJalali.toFaDigits(String(row.jalali || row.day).slice(5)),
+      fullLabel: IAJalali.toFaDigits(row.jalali || row.day),
+      y: row.pageviews,
+      y2: row.conversions || 0,
+    }));
+    IACharts.lineChart(document.getElementById('chart-series'), chartPoints, {
+      label1: 'بازدید',
+      label2: 'تبدیل',
     });
-    IACharts.lineChart(document.getElementById('chart-series'), chartPoints);
+
+    const srcBars = (sourcesRes.sources || []).slice(0, 7).map((s) => ({
+      label: sourceLabel(s.source),
+      value: s.views,
+      sub: `${faNum(s.converting_sessions || 0)} تبدیل`,
+    }));
+    IACharts.barChart(document.getElementById('chart-sources-bar'), srcBars);
 
     const deviceSlices = (devices.devices || []).map((d) => ({
       label: deviceLabel(d.name),
@@ -334,40 +560,13 @@
 
     renderRankTable(document.getElementById('top-pages'), pages.pages || [], 'path', 'views', {
       asPages: true,
+      onClickPath: true,
     });
-    renderRankTable(
-      document.getElementById('top-referrers'),
-      (referrers.referrers || []).map((r) => ({
-        ...r,
-        referrer: r.referrer === '(direct)' ? 'ورود مستقیم' : r.referrer,
-      })),
-      'referrer',
-      'views'
-    );
     renderRankTable(document.getElementById('top-browsers'), devices.browsers || [], 'name', 'views');
-
-    void events;
-  }
-
-  function campaignTitle(row) {
-    if (row.campaign) return row.campaign;
-    if (row.source) return row.source;
-    if (row.medium) return row.medium;
-    return 'کمپین بدون نام';
-  }
-
-  function campaignSub(row) {
-    const bits = [];
-    if (row.campaign && row.source) bits.push(row.source);
-    if (row.medium) bits.push(row.medium);
-    if (row.term) bits.push(row.term);
-    return bits.join(' · ');
   }
 
   async function loadBehavior() {
-    const site = siteFilterB.value || siteFilter.value || 'all';
-    const days = daysFilterB.value || daysFilter.value || '7';
-    const q = `site=${encodeURIComponent(site)}&days=${encodeURIComponent(days)}`;
+    const q = filterQuery();
     const errEl = document.getElementById('behavior-error');
     errEl.textContent = '';
 
@@ -379,80 +578,19 @@
       return;
     }
 
-    const buckets = [
-      { key: 'b0', label: 'زیر ۲۵٪' },
-      { key: 'b25', label: '۲۵ تا ۵۰٪' },
-      { key: 'b50', label: '۵۰ تا ۷۵٪' },
-      { key: 'b75', label: '۷۵ تا ۹۹٪' },
-      { key: 'b100', label: 'تا انتهای صفحه' },
-    ];
     const scroll = behavior.scroll || {};
-    const counts = buckets.map((b) => Number(scroll[b.key] || 0));
-    const maxScroll = Math.max(...counts, 1);
-    const totalScroll = counts.reduce((sum, n) => sum + n, 0);
-    const meter = document.getElementById('depth-meter');
-    if (!totalScroll) {
-      meter.innerHTML = '';
-    } else {
-      meter.innerHTML = counts
-        .map((n, i) =>
-          n > 0 ? `<span class="${i === buckets.length - 1 ? 'tone-end' : ''}" style="flex:${n} 1 0"></span>` : ''
-        )
-        .join('');
-    }
-    document.getElementById('scroll-legend').innerHTML = buckets
-      .map((b, i) => {
-        const pct = counts[i] === 0 ? 0 : Math.max(8, Math.round((counts[i] / maxScroll) * 100));
-        return `<div class="scroll-row">
-          <span>${b.label}</span>
-          <span class="scroll-track"><span class="bar" style="width:${pct}%"></span></span>
-          <span>${faNum(counts[i])}</span>
-        </div>`;
-      })
-      .join('');
+    const scrollItems = [
+      { label: 'زیر ۲۵٪', value: Number(scroll.b0 || 0) },
+      { label: '۲۵-۴۹٪', value: Number(scroll.b25 || 0) },
+      { label: '۵۰-۷۴٪', value: Number(scroll.b50 || 0) },
+      { label: '۷۵-۹۹٪', value: Number(scroll.b75 || 0) },
+      { label: '۱۰۰٪', value: Number(scroll.b100 || 0), accent: true },
+    ];
+    IACharts.barChart(document.getElementById('chart-scroll-bar'), scrollItems);
 
-    const campaigns = behavior.campaigns || [];
-    const campaignEl = document.getElementById('campaign-table');
-    if (!campaigns.length) {
-      campaignEl.innerHTML = '<p class="empty">هنوز ورودی کمپینی ثبت نشده.</p>';
-    } else {
-      campaignEl.innerHTML = `<table class="table wide"><thead><tr>
-        <th>کمپین</th><th>بازدید</th><th>نشست</th><th>زمان</th><th>اسکرول</th>
-      </tr></thead><tbody>${campaigns
-        .map((row) => {
-          const sub = campaignSub(row);
-          return `<tr>
-            <td>${escapeHtml(campaignTitle(row))}${sub ? `<span class="cell-sub">${escapeHtml(sub)}</span>` : ''}</td>
-            <td>${faNum(row.views)}</td>
-            <td>${faNum(row.sessions)}</td>
-            <td>${row.avg_ms == null ? '—' : faDuration(row.avg_ms)}</td>
-            <td>${row.avg_scroll == null ? '—' : faPct(row.avg_scroll)}</td>
-          </tr>`;
-        })
-        .join('')}</tbody></table>`;
-    }
-
-    const clicks = behavior.clicks || [];
-    const clickEl = document.getElementById('click-table');
-    if (!clicks.length) {
-      clickEl.innerHTML = '<p class="empty">هنوز کلیکی ثبت نشده.</p>';
-    } else {
-      const maxClick = Math.max(...clicks.map((c) => Number(c.count) || 0), 1);
-      clickEl.innerHTML = `<table class="table"><thead><tr><th>عنصر</th><th>تعداد</th></tr></thead><tbody>${clicks
-        .map((row) => {
-          const pct = Math.max(8, Math.round((Number(row.count) / maxClick) * 100));
-          const href = row.href ? String(row.href) : '';
-          const outbound = Number(row.outbound) === 1;
-          const sub = href
-            ? `<span class="cell-sub" dir="ltr">${escapeHtml(href)}${outbound ? ' · خروجی' : ''}</span>`
-            : '';
-          return `<tr>
-            <td>${escapeHtml(row.label || 'بدون متن')}${sub}</td>
-            <td><div class="bar-cell"><span>${faNum(row.count)}</span><span class="bar" style="width:${pct}%"></span></div></td>
-          </tr>`;
-        })
-        .join('')}</tbody></table>`;
-    }
+    renderSourcesTable(document.getElementById('source-table'), behavior.sources || []);
+    renderCampaignsTable(document.getElementById('campaign-table'), behavior.campaigns || []);
+    renderClicksTable(document.getElementById('click-table'), behavior.clicks || []);
 
     const pages = behavior.pages || [];
     const engageEl = document.getElementById('engage-table');
@@ -466,9 +604,9 @@
           const timed = Number(row.avg_ms) > 0;
           const scrolled = row.avg_scroll != null && row.avg_scroll !== '' && Number.isFinite(Number(row.avg_scroll));
           const label = pageLabel(row);
-          return `<tr>
+          return `<tr class="link-row" data-open-page="${escapeHtml(row.path)}">
             <td>
-              ${escapeHtml(label.main)}
+              <span class="link-title">${escapeHtml(label.main)}</span>
               ${label.sub ? `<span class="cell-sub" dir="ltr">${escapeHtml(label.sub)}</span>` : ''}
             </td>
             <td>${faNum(row.views)}</td>
@@ -477,18 +615,284 @@
           </tr>`;
         })
         .join('')}</tbody></table>`;
+
+      engageEl.querySelectorAll('[data-open-page]').forEach((tr) => {
+        tr.addEventListener('click', () => openPageDetail(tr.dataset.openPage));
+      });
     }
   }
 
-  function deviceLabel(name) {
-    const map = {
-      desktop: 'دسکتاپ',
-      mobile: 'موبایل',
-      tablet: 'تبلت',
-      smarttv: 'تلویزیون',
-    };
-    return map[name] || name || 'نامشخص';
+  async function loadPageDetail(path) {
+    const errEl = document.getElementById('page-error');
+    errEl.textContent = '';
+    if (!path) return;
+
+    let data;
+    try {
+      data = await api(`/api/stats/page?${filterQuery({ path })}`);
+    } catch (err) {
+      if (!err || err.message !== 'unauthorized') errEl.textContent = 'بارگذاری جزئیات صفحه ناموفق بود.';
+      return;
+    }
+
+    const label = pageLabel({ path: data.path, title: data.title });
+    document.getElementById('page-detail-title').textContent = label.main;
+    document.getElementById('page-detail-path').textContent = data.path;
+
+    const sum = data.summary || {};
+    document.getElementById('pd-views').textContent = faNum(sum.views);
+    document.getElementById('pd-sessions').textContent = faNum(sum.sessions);
+    document.getElementById('pd-time').textContent = sum.avg_ms == null ? '—' : faDuration(sum.avg_ms);
+    document.getElementById('pd-scroll').textContent = sum.avg_scroll == null ? '—' : faPct(sum.avg_scroll);
+    document.getElementById('pd-conv').textContent = faNum(sum.conversions);
+    document.getElementById('pd-cvr').textContent =
+      sum.sessions > 0 ? `نرخ تبدیل: ${faPct(sum.cvr)} · ${faNum(sum.clicks)} کلیک` : '';
+
+    const pts = (data.series || []).map((row) => ({
+      label: IAJalali.toFaDigits(String(row.jalali || row.day).slice(5)),
+      fullLabel: IAJalali.toFaDigits(row.jalali || row.day),
+      y: row.pageviews,
+      y2: row.conversions || 0,
+    }));
+    IACharts.lineChart(document.getElementById('chart-page-series'), pts, {
+      label1: 'بازدید',
+      label2: 'تبدیل',
+    });
+
+    const s = data.scroll || {};
+    IACharts.barChart(document.getElementById('chart-page-scroll'), [
+      { label: 'زیر ۲۵٪', value: Number(s.b0 || 0) },
+      { label: '۲۵-۴۹٪', value: Number(s.b25 || 0) },
+      { label: '۵۰-۷۴٪', value: Number(s.b50 || 0) },
+      { label: '۷۵-۹۹٪', value: Number(s.b75 || 0) },
+      { label: '۱۰۰٪', value: Number(s.b100 || 0), accent: true },
+    ]);
+
+    renderSourcesTable(document.getElementById('pd-sources-table'), data.sources || []);
+    renderClicksTable(document.getElementById('pd-clicks-table'), data.clicks || []);
+    renderCampaignsTable(document.getElementById('pd-campaigns-table'), data.campaigns || []);
+
+    const goalsEl = document.getElementById('pd-goals-table');
+    const goals = data.goals || [];
+    if (!goals.length) {
+      goalsEl.innerHTML = '<p class="empty">هنوز تبدیلی روی این صفحه ثبت نشده.</p>';
+    } else {
+      goalsEl.innerHTML = `<table class="table"><thead><tr><th>هدف</th><th>تعداد</th><th>نشست</th></tr></thead><tbody>${goals
+        .map(
+          (g) => `<tr>
+            <td>${escapeHtml(goalLabel(g.goal, g.goal_name))}</td>
+            <td>${faNum(g.conversions)}</td>
+            <td>${faNum(g.sessions)}</td>
+          </tr>`
+        )
+        .join('')}</tbody></table>`;
+    }
   }
+
+  async function loadConversions() {
+    const q = filterQuery();
+    const errEl = document.getElementById('conversion-error');
+    errEl.textContent = '';
+
+    let data;
+    let journeysData = { journeys: [], funnels: [] };
+    try {
+      [data, journeysData] = await Promise.all([
+        api(`/api/stats/conversions?${q}`),
+        api(`/api/stats/journeys?${q}`),
+      ]);
+    } catch (err) {
+      if (!err || err.message !== 'unauthorized') errEl.textContent = 'بارگذاری گزارش تبدیل ناموفق بود.';
+      return;
+    }
+
+    document.getElementById('conv-total').textContent = faNum(data.conversions);
+    document.getElementById('conv-sessions').textContent = faNum(data.converting_sessions);
+    document.getElementById('conv-all-sessions').textContent = faNum(data.sessions);
+    document.getElementById('conv-cvr').textContent = faPct(data.cvr);
+
+    const chartPoints = (data.series || []).map((row) => ({
+      label: IAJalali.toFaDigits(String(row.jalali || row.day).slice(5)),
+      fullLabel: IAJalali.toFaDigits(row.jalali || row.day),
+      y: Number(row.conversions) || 0,
+    }));
+    IACharts.lineChart(document.getElementById('chart-conversions'), chartPoints, { label1: 'تبدیل' });
+
+    const goalSlices = (data.goals || []).map((g) => ({
+      label: goalLabel(g.goal, g.goal_name),
+      value: Number(g.conversions) || 0,
+    }));
+    IACharts.donutChart(document.getElementById('chart-goals'), goalSlices);
+
+    const campEl = document.getElementById('conv-campaign-table');
+    const campaigns = data.campaigns || [];
+    if (!campaigns.length) {
+      campEl.innerHTML = '<p class="empty">هنوز کمپینی با تبدیل در این بازه ثبت نشده.</p>';
+    } else {
+      campEl.innerHTML = `<table class="table wide"><thead><tr>
+        <th>کمپین</th><th>نشست</th><th>تبدیل</th><th>نرخ</th>
+      </tr></thead><tbody>${campaigns
+        .map((row) => {
+          const title = row.campaign || sourceLabel(row.source) || 'بدون نام';
+          const sub = [sourceLabel(row.source), row.medium].filter(Boolean).join(' · ');
+          return `<tr>
+            <td>${escapeHtml(title)}${sub ? `<span class="cell-sub">${escapeHtml(sub)}</span>` : ''}</td>
+            <td>${faNum(row.sessions)}</td>
+            <td>${faNum(row.converting_sessions || row.conversions)}</td>
+            <td>${faPct(row.cvr)}</td>
+          </tr>`;
+        })
+        .join('')}</tbody></table>`;
+    }
+
+    const goalEl = document.getElementById('conv-goal-table');
+    const goals = data.goals || [];
+    if (!goals.length) {
+      goalEl.innerHTML = '<p class="empty">هنوز تبدیلی ثبت نشده.</p>';
+    } else {
+      const max = Math.max(...goals.map((g) => Number(g.conversions) || 0), 1);
+      goalEl.innerHTML = `<table class="table"><thead><tr><th>هدف</th><th>تعداد</th><th>نشست</th></tr></thead><tbody>${goals
+        .map((g) => {
+          const pct = Math.max(8, Math.round((Number(g.conversions) / max) * 100));
+          return `<tr>
+            <td>${escapeHtml(goalLabel(g.goal, g.goal_name))}</td>
+            <td><div class="bar-cell"><span>${faNum(g.conversions)}</span><span class="bar" style="width:${pct}%"></span></div></td>
+            <td>${faNum(g.sessions)}</td>
+          </tr>`;
+        })
+        .join('')}</tbody></table>`;
+    }
+
+    const funnelEl = document.getElementById('funnel-table');
+    const funnels = journeysData.funnels || [];
+    if (!funnels.length) {
+      funnelEl.innerHTML = '<p class="empty">هنوز لندینگی برای قیف نیست.</p>';
+    } else {
+      funnelEl.innerHTML = `<table class="table wide"><thead><tr>
+        <th>لندینگ</th><th>نشست</th><th>تبدیل</th><th>نرخ</th>
+      </tr></thead><tbody>${funnels
+        .map((row) => {
+          const label = pageLabel(row);
+          return `<tr class="link-row" data-open-page="${escapeHtml(row.path)}">
+            <td><span class="link-title">${escapeHtml(label.main)}</span>${
+              label.sub ? `<span class="cell-sub" dir="ltr">${escapeHtml(label.sub)}</span>` : ''
+            }</td>
+            <td>${faNum(row.sessions)}</td>
+            <td>${faNum(row.converted)}</td>
+            <td>${faPct(row.cvr)}</td>
+          </tr>`;
+        })
+        .join('')}</tbody></table>`;
+      funnelEl.querySelectorAll('[data-open-page]').forEach((tr) => {
+        tr.addEventListener('click', () => openPageDetail(tr.dataset.openPage));
+      });
+    }
+
+    const journeyEl = document.getElementById('journey-table');
+    const journeys = journeysData.journeys || [];
+    if (!journeys.length) {
+      journeyEl.innerHTML = '<p class="empty">نشستی در این بازه نیست.</p>';
+    } else {
+      journeyEl.innerHTML = `<div class="journey-list">${journeys
+        .slice(0, 20)
+        .map((j) => {
+          const camp = [j.source ? sourceLabel(j.source) : '', j.medium, j.campaign]
+            .filter(Boolean)
+            .join(' · ');
+          const steps = (j.path || []).map((p) => escapeHtml(prettyPath(p))).join(' ← ');
+          const goalsTxt = (j.conversions || [])
+            .map((c) => goalLabel(c.goal, c.goal_name))
+            .join('، ');
+          const when = j.started_jalali ? IAJalali.toFaDigits(j.started_jalali) : '';
+          return `<article class="journey-card ${j.converted ? 'is-converted' : ''}">
+            <div class="journey-top">
+              <span>${j.converted ? 'تبدیل شد' : 'بدون تبدیل'}${when ? ` · ${escapeHtml(when)}` : ''}</span>
+              <span class="cell-sub">${camp ? escapeHtml(camp) : 'ورود مستقیم'} · ${faNum(j.pages_count)} صفحه</span>
+            </div>
+            <p class="journey-path" dir="ltr">${steps || '—'}</p>
+            ${goalsTxt ? `<p class="journey-goals">هدف: ${escapeHtml(goalsTxt)}</p>` : ''}
+          </article>`;
+        })
+        .join('')}</div>`;
+    }
+  }
+
+  async function loadGoals() {
+    goalFormErr.textContent = '';
+    try {
+      const data = await api(`/api/goals?site=${encodeURIComponent(fSite.value || 'all')}`);
+      const list = data.goals || [];
+      if (!list.length) {
+        goalsList.innerHTML = '<p class="empty">هنوز هدف سفارشی نساخته‌اید. از فرم کنار یکی بسازید.</p>';
+        return;
+      }
+      goalsList.innerHTML = `<table class="table wide"><thead><tr>
+        <th>نام هدف</th><th>سایت</th><th>شرط</th><th>عملیات</th>
+      </tr></thead><tbody>${list
+        .map(
+          (g) => `<tr>
+            <td><strong>${escapeHtml(g.name)}</strong>${
+              g.is_active ? '' : '<span class="cell-sub">غیرفعال</span>'
+            }</td>
+            <td>${escapeHtml(g.site_name)}</td>
+            <td>${escapeHtml(matchTypeLabel(g.match_type))}<span class="cell-sub" dir="ltr">${escapeHtml(
+              g.match_value
+            )}</span></td>
+            <td>
+              <div style="display:flex;gap:6px">
+                <button type="button" class="btn btn-ghost btn-sm" data-toggle-goal="${g.id}" data-active="${
+                  g.is_active ? '1' : '0'
+                }">${g.is_active ? 'غیرفعال' : 'فعال'}</button>
+                <button type="button" class="btn btn-danger btn-sm" data-del-goal="${g.id}">حذف</button>
+              </div>
+            </td>
+          </tr>`
+        )
+        .join('')}</tbody></table>`;
+
+      goalsList.querySelectorAll('[data-toggle-goal]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const active = btn.dataset.active === '1';
+          await api(`/api/goals/${btn.dataset.toggleGoal}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ is_active: !active }),
+          });
+          loadGoals();
+        });
+      });
+
+      goalsList.querySelectorAll('[data-del-goal]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('این هدف حذف شود؟')) return;
+          await api(`/api/goals/${btn.dataset.delGoal}`, { method: 'DELETE' });
+          loadGoals();
+        });
+      });
+    } catch {
+      goalsList.innerHTML = '<p class="empty">خطا در دریافت هدف‌ها.</p>';
+    }
+  }
+
+  goalForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    goalFormErr.textContent = '';
+    try {
+      await api('/api/goals', {
+        method: 'POST',
+        body: JSON.stringify({
+          site_id: goalSite.value,
+          name: document.getElementById('goal-name').value,
+          match_type: document.getElementById('goal-type').value,
+          match_value: document.getElementById('goal-value').value,
+        }),
+      });
+      document.getElementById('goal-name').value = '';
+      document.getElementById('goal-value').value = '';
+      await loadGoals();
+    } catch {
+      goalFormErr.textContent = 'ثبت هدف ناموفق بود. همه فیلدها را بررسی کنید.';
+    }
+  });
 
   function renderSites() {
     if (!sites.length) {
@@ -589,11 +993,12 @@
   async function refreshSites() {
     const data = await api('/api/sites');
     sites = data.sites || [];
-    fillSiteFilter();
+    fillSiteSelectors();
   }
 
   async function bootstrap() {
     await refreshSites();
+    await refreshFilterChoices();
     setView('dashboard');
   }
 
@@ -611,144 +1016,15 @@
     }
   }
 
+  let resizeTimer = null;
   window.addEventListener('resize', () => {
-    if (!appView.classList.contains('hidden')) {
-      // redraw on resize if dashboard visible
-      if (!document.getElementById('view-dashboard').classList.contains('hidden')) {
-        loadDashboard().catch(() => {});
-      }
-      if (!document.getElementById('view-behavior').classList.contains('hidden')) {
-        loadBehavior().catch(() => {});
-      }
-      if (!document.getElementById('view-conversions').classList.contains('hidden')) {
-        loadConversions().catch(() => {});
-      }
-    }
+    if (appView.classList.contains('hidden')) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (currentView !== 'sites' && currentView !== 'goals') reloadCurrentView();
+    }, 150);
   });
 
-  async function loadConversions() {
-    const site = siteFilterC.value || siteFilter.value || 'all';
-    const days = daysFilterC.value || daysFilter.value || '7';
-    const q = `site=${encodeURIComponent(site)}&days=${encodeURIComponent(days)}`;
-    const errEl = document.getElementById('conversion-error');
-    errEl.textContent = '';
-
-    let data;
-    let journeysData = { journeys: [], funnels: [] };
-    try {
-      [data, journeysData] = await Promise.all([
-        api(`/api/stats/conversions?${q}`),
-        api(`/api/stats/journeys?${q}`),
-      ]);
-    } catch (err) {
-      if (!err || err.message !== 'unauthorized') errEl.textContent = 'بارگذاری گزارش تبدیل ناموفق بود.';
-      return;
-    }
-
-    document.getElementById('conv-total').textContent = faNum(data.conversions);
-    document.getElementById('conv-sessions').textContent = faNum(data.converting_sessions);
-    document.getElementById('conv-all-sessions').textContent = faNum(data.sessions);
-    document.getElementById('conv-cvr').textContent = faPct(data.cvr);
-
-    const chartPoints = (data.series || []).map((row) => ({
-      label: String(row.day).slice(5, 10),
-      y: Number(row.conversions) || 0,
-    }));
-    IACharts.lineChart(document.getElementById('chart-conversions'), chartPoints);
-
-    const goalSlices = (data.goals || []).map((g) => ({
-      label: goalLabel(g.goal),
-      value: Number(g.conversions) || 0,
-    }));
-    IACharts.donutChart(document.getElementById('chart-goals'), goalSlices);
-
-    const campEl = document.getElementById('conv-campaign-table');
-    const campaigns = data.campaigns || [];
-    if (!campaigns.length) {
-      campEl.innerHTML =
-        '<p class="empty">هنوز کمپینی با تبدیل ثبت نشده. لینک یکتانت/UTM بزنید و روی تماس یا مشاوره کلیک کنید.</p>';
-    } else {
-      campEl.innerHTML = `<table class="table wide"><thead><tr>
-        <th>کمپین</th><th>نشست</th><th>تبدیل</th><th>نرخ</th>
-      </tr></thead><tbody>${campaigns
-        .map((row) => {
-          const title = row.campaign || row.source || 'بدون نام';
-          const sub = [row.source, row.medium].filter(Boolean).join(' · ');
-          return `<tr>
-            <td>${escapeHtml(title)}${sub ? `<span class="cell-sub">${escapeHtml(sub)}</span>` : ''}</td>
-            <td>${faNum(row.sessions)}</td>
-            <td>${faNum(row.converting_sessions || row.conversions)}</td>
-            <td>${faPct(row.cvr)}</td>
-          </tr>`;
-        })
-        .join('')}</tbody></table>`;
-    }
-
-    const goalEl = document.getElementById('conv-goal-table');
-    const goals = data.goals || [];
-    if (!goals.length) {
-      goalEl.innerHTML = '<p class="empty">هنوز تبدیلی ثبت نشده.</p>';
-    } else {
-      const max = Math.max(...goals.map((g) => Number(g.conversions) || 0), 1);
-      goalEl.innerHTML = `<table class="table"><thead><tr><th>هدف</th><th>تعداد</th><th>نشست</th></tr></thead><tbody>${goals
-        .map((g) => {
-          const pct = Math.max(8, Math.round((Number(g.conversions) / max) * 100));
-          return `<tr>
-            <td>${escapeHtml(goalLabel(g.goal))}</td>
-            <td><div class="bar-cell"><span>${faNum(g.conversions)}</span><span class="bar" style="width:${pct}%"></span></div></td>
-            <td>${faNum(g.sessions)}</td>
-          </tr>`;
-        })
-        .join('')}</tbody></table>`;
-    }
-
-    const funnelEl = document.getElementById('funnel-table');
-    const funnels = journeysData.funnels || [];
-    if (!funnels.length) {
-      funnelEl.innerHTML = '<p class="empty">هنوز لندینگی برای قیف نیست.</p>';
-    } else {
-      funnelEl.innerHTML = `<table class="table wide"><thead><tr>
-        <th>لندینگ</th><th>نشست</th><th>تبدیل</th><th>نرخ</th>
-      </tr></thead><tbody>${funnels
-        .map((row) => {
-          const label = pageLabel(row);
-          return `<tr>
-            <td>${escapeHtml(label.main)}${
-              label.sub ? `<span class="cell-sub" dir="ltr">${escapeHtml(label.sub)}</span>` : ''
-            }</td>
-            <td>${faNum(row.sessions)}</td>
-            <td>${faNum(row.converted)}</td>
-            <td>${faPct(row.cvr)}</td>
-          </tr>`;
-        })
-        .join('')}</tbody></table>`;
-    }
-
-    const journeyEl = document.getElementById('journey-table');
-    const journeys = journeysData.journeys || [];
-    if (!journeys.length) {
-      journeyEl.innerHTML = '<p class="empty">نشستی در این بازه نیست.</p>';
-    } else {
-      journeyEl.innerHTML = `<div class="journey-list">${journeys
-        .slice(0, 20)
-        .map((j) => {
-          const camp = [j.source, j.medium, j.campaign].filter(Boolean).join(' · ');
-          const steps = (j.path || []).map((p) => escapeHtml(prettyPath(p))).join(' ← ');
-          const goals = (j.conversions || []).map((c) => goalLabel(c.goal)).join('، ');
-          return `<article class="journey-card ${j.converted ? 'is-converted' : ''}">
-            <div class="journey-top">
-              <span>${j.converted ? 'تبدیل شد' : 'بدون تبدیل'}</span>
-              <span class="cell-sub">${camp ? escapeHtml(camp) : 'ورود مستقیم/بدون UTM'} · ${faNum(
-                j.pages_count
-              )} صفحه</span>
-            </div>
-            <p class="journey-path" dir="ltr">${steps || '—'}</p>
-            ${goals ? `<p class="journey-goals">هدف: ${escapeHtml(goals)}</p>` : ''}
-          </article>`;
-        })
-        .join('')}</div>`;
-    }
-  }
-
+  void picker;
   init();
 })();

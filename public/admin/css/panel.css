@@ -278,7 +278,207 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 22px;
+  margin-bottom: 18px;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  background: rgba(255, 252, 246, 0.88);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.filter-group,
+.filter-export {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-sm {
+  padding: 7px 13px;
+  font-size: 0.84rem;
+  width: auto;
+}
+
+.active-filter-badge {
+  font-size: 0.84rem;
+  color: var(--sea-deep);
+}
+
+.panel-hint {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.link-row {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.link-row:hover {
+  background: rgba(13, 110, 110, 0.06);
+}
+
+.link-title {
+  color: var(--sea-deep);
+  font-weight: 600;
+}
+
+/* —— Jalali Range Picker —— */
+.jalali-picker {
+  position: relative;
+}
+
+.jalali-trigger {
+  cursor: pointer;
+}
+
+.jalali-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  width: min(320px, 92vw);
+  padding: 14px;
+  background: #fffdf8;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+.jalali-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.jalali-presets button {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.jalali-presets button:hover {
+  background: var(--sea-soft);
+  color: var(--sea-deep);
+}
+
+.jalali-cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.cal-nav {
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.jalali-weekdays,
+.jalali-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  text-align: center;
+}
+
+.jalali-weekdays span {
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding-bottom: 4px;
+}
+
+.cal-day {
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  height: 30px;
+  cursor: pointer;
+  font-size: 0.84rem;
+  color: var(--ink);
+}
+
+.cal-day:hover {
+  background: var(--sea-soft);
+}
+
+.cal-day.in-range {
+  background: rgba(13, 110, 110, 0.14);
+}
+
+.cal-day.is-edge {
+  background: var(--sea);
+  color: #f4fffd;
+  font-weight: 600;
+}
+
+.jalali-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.jalali-inputs label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.jalali-inputs input {
+  width: 86px;
+  padding: 5px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  background: #fff;
+}
+
+.chart-tip {
+  position: absolute;
+  transform: translateX(-50%);
+  background: #1a2a28;
+  color: #f4fffd;
+  font-size: 0.76rem;
+  padding: 4px 9px;
+  border-radius: 8px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 10;
 }
 
 .topbar h1 {

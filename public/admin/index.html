@@ -38,8 +38,9 @@
         </div>
         <nav class="nav">
           <button type="button" data-view="dashboard" class="active">نمای کلی</button>
-          <button type="button" data-view="behavior">رفتار و کمپین</button>
+          <button type="button" data-view="behavior">رفتار و منابع</button>
           <button type="button" data-view="conversions">تبدیل و گزارش</button>
+          <button type="button" data-view="goals">اهداف تبدیل</button>
           <button type="button" data-view="sites">سایت‌ها</button>
         </nav>
         <div class="side-foot">
@@ -48,19 +49,34 @@
       </aside>
 
       <main class="main">
+        <div class="filter-bar" id="global-filter-bar">
+          <div class="filter-group">
+            <select id="f-site" class="chip-select" aria-label="انتخاب سایت"></select>
+            <div id="f-jalali-mount"></div>
+            <select id="f-source" class="chip-select" aria-label="منبع ورودی">
+              <option value="all">همه منابع</option>
+            </select>
+            <select id="f-campaign" class="chip-select" aria-label="کمپین">
+              <option value="all">همه کمپین‌ها</option>
+            </select>
+            <button type="button" class="btn btn-ghost btn-sm hidden" id="f-reset-btn">پاک کردن فیلتر</button>
+          </div>
+          <div class="filter-export">
+            <select id="export-report-type" class="chip-select" aria-label="نوع خروجی">
+              <option value="pages">خروجی صفحه‌ها</option>
+              <option value="sources">خروجی منابع</option>
+              <option value="campaigns">خروجی کمپین‌ها</option>
+              <option value="clicks">خروجی کلیک‌ها</option>
+              <option value="conversions">خروجی تبدیل‌ها</option>
+            </select>
+            <button type="button" class="btn btn-primary btn-sm" id="export-btn">دانلود Excel</button>
+          </div>
+        </div>
+
         <section id="view-dashboard">
           <div class="topbar">
             <h1>نمای کلی ترافیک</h1>
-            <div class="topbar-actions">
-              <select id="site-filter" class="chip-select" aria-label="انتخاب سایت"></select>
-              <select id="days-filter" class="chip-select" aria-label="بازه زمانی">
-                <option value="1">۲۴ ساعت</option>
-                <option value="7" selected>۷ روز</option>
-                <option value="14">۱۴ روز</option>
-                <option value="30">۳۰ روز</option>
-                <option value="90">۹۰ روز</option>
-              </select>
-            </div>
+            <span class="active-filter-badge" id="active-filter-summary"></span>
           </div>
 
           <div class="stats-row" id="stats-row">
@@ -113,26 +129,26 @@
 
           <div class="grid-2">
             <div class="panel">
-              <h2>روند بازدید</h2>
+              <h2>روند بازدید و تبدیل</h2>
               <div class="chart-wrap"><canvas id="chart-series"></canvas></div>
             </div>
             <div class="panel">
-              <h2>دستگاه‌ها</h2>
-              <div class="chart-wrap"><canvas id="chart-devices"></canvas></div>
+              <h2>ورودی به تفکیک منبع</h2>
+              <div class="chart-wrap"><canvas id="chart-sources-bar"></canvas></div>
             </div>
           </div>
 
           <div class="grid-3">
             <div class="panel">
-              <h2>صفحات پربازدید</h2>
+              <h2>صفحات پربازدید <span class="panel-hint">(کلیک = جزئیات صفحه)</span></h2>
               <div id="top-pages"></div>
             </div>
             <div class="panel">
-              <h2>ارجاع‌دهنده‌ها</h2>
-              <div id="top-referrers"></div>
+              <h2>دستگاه‌ها</h2>
+              <div class="chart-wrap"><canvas id="chart-devices"></canvas></div>
             </div>
             <div class="panel">
-              <h2>مرورگرها</h2>
+              <h2>مرورگرها و ارجاع</h2>
               <div id="top-browsers"></div>
             </div>
           </div>
@@ -140,28 +156,28 @@
 
         <section id="view-behavior" class="hidden">
           <div class="topbar">
-            <h1>رفتار و کمپین</h1>
-            <div class="topbar-actions">
-              <select id="site-filter-b" class="chip-select" aria-label="انتخاب سایت"></select>
-              <select id="days-filter-b" class="chip-select" aria-label="بازه زمانی">
-                <option value="1">۲۴ ساعت</option>
-                <option value="7" selected>۷ روز</option>
-                <option value="14">۱۴ روز</option>
-                <option value="30">۳۰ روز</option>
-                <option value="90">۹۰ روز</option>
-              </select>
-            </div>
+            <h1>رفتار، اسکرول و منابع</h1>
           </div>
           <p class="panel-note">
-            زمان فعال حداکثر ۳۰ دقیقه برای هر بازدید است. پارامترهای UTM تا آخر همان نشست روی صفحه‌های بعدی می‌مانند. کلیک مقدار فیلدها را نمی‌خواند.
+            می‌توانید بالا منبع را مثلاً روی «گوگل» بگذارید تا اسکرول، زمان فعال و کلیک‌های همان ورودی‌ها را ببینید. روی هر صفحه کلیک کنید تا جزئیات کاملش باز شود.
           </p>
           <p class="form-error" id="behavior-error"></p>
 
           <div class="grid-2">
             <div class="panel">
-              <h2>عمق اسکرول</h2>
-              <div class="depth-meter" id="depth-meter" aria-hidden="true"></div>
-              <div id="scroll-legend"></div>
+              <h2>نمودار عمق اسکرول</h2>
+              <div class="chart-wrap"><canvas id="chart-scroll-bar"></canvas></div>
+            </div>
+            <div class="panel">
+              <h2>منابع ورودی و نرخ تبدیل</h2>
+              <div class="table-wrap" id="source-table"></div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h2>زمان ماندن و اسکرول صفحه‌ها <span class="panel-hint">(کلیک = جزئیات)</span></h2>
+              <div class="table-wrap" id="engage-table"></div>
             </div>
             <div class="panel">
               <h2>کمپین‌ها</h2>
@@ -169,14 +185,83 @@
             </div>
           </div>
 
+          <div class="panel">
+            <h2>کجا کلیک شده</h2>
+            <div class="table-wrap" id="click-table"></div>
+          </div>
+        </section>
+
+        <section id="view-page" class="hidden">
+          <div class="topbar">
+            <div class="page-head">
+              <button type="button" class="btn btn-ghost btn-sm" id="page-back-btn">→ بازگشت</button>
+              <div>
+                <h1 id="page-detail-title">جزئیات صفحه</h1>
+                <p class="site-meta" id="page-detail-path" dir="ltr"></p>
+              </div>
+            </div>
+            <div class="topbar-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="page-export-btn">
+                خروجی Excel این صفحه
+              </button>
+            </div>
+          </div>
+          <p class="form-error" id="page-error"></p>
+
+          <div class="stats-row stats-follow">
+            <div class="stat">
+              <p class="stat-label">بازدید صفحه</p>
+              <p class="stat-value" id="pd-views">—</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">نشست‌ها</p>
+              <p class="stat-value" id="pd-sessions">—</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">زمان فعال</p>
+              <p class="stat-value" id="pd-time">—</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">عمق اسکرول</p>
+              <p class="stat-value" id="pd-scroll">—</p>
+            </div>
+            <div class="stat">
+              <p class="stat-label">تبدیل</p>
+              <p class="stat-value" id="pd-conv">—</p>
+              <p class="stat-delta" id="pd-cvr"></p>
+            </div>
+          </div>
+
           <div class="grid-2">
             <div class="panel">
-              <h2>کجا کلیک شده</h2>
-              <div class="table-wrap" id="click-table"></div>
+              <h2>روند بازدید و تبدیل این صفحه</h2>
+              <div class="chart-wrap"><canvas id="chart-page-series"></canvas></div>
             </div>
             <div class="panel">
-              <h2>زمان ماندن در صفحه</h2>
-              <div class="table-wrap" id="engage-table"></div>
+              <h2>اسکرول در این صفحه</h2>
+              <div class="chart-wrap"><canvas id="chart-page-scroll"></canvas></div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h2>ورودی این صفحه از چه طریقی بوده؟</h2>
+              <div class="table-wrap" id="pd-sources-table"></div>
+            </div>
+            <div class="panel">
+              <h2>کلیک‌ها در این صفحه</h2>
+              <div class="table-wrap" id="pd-clicks-table"></div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <h2>کمپین‌های این صفحه</h2>
+              <div class="table-wrap" id="pd-campaigns-table"></div>
+            </div>
+            <div class="panel">
+              <h2>هدف‌های ثبت‌شده روی این صفحه</h2>
+              <div class="table-wrap" id="pd-goals-table"></div>
             </div>
           </div>
         </section>
@@ -184,21 +269,9 @@
         <section id="view-conversions" class="hidden">
           <div class="topbar">
             <h1>تبدیل و گزارش کمپین</h1>
-            <div class="topbar-actions">
-              <select id="site-filter-c" class="chip-select" aria-label="انتخاب سایت"></select>
-              <select id="days-filter-c" class="chip-select" aria-label="بازه زمانی">
-                <option value="1">۲۴ ساعت</option>
-                <option value="7" selected>۷ روز</option>
-                <option value="14">۱۴ روز</option>
-                <option value="30">۳۰ روز</option>
-                <option value="90">۹۰ روز</option>
-              </select>
-            </div>
           </div>
           <p class="panel-note">
-            تبدیل یعنی اقدام مهم: تماس تلفنی، واتساپ، ایمیل، صفحه مشاوره، یا دکمه‌ای با
-            <code dir="ltr">data-ia-goal</code>.
-            نرخ تبدیل = نشست‌های تبدیل‌شده ÷ کل نشست‌های همان منبع.
+            تبدیل هم به‌صورت خودکار (تماس، واتساپ، ایمیل، فرم و مشاوره) و هم از اهدافی که در بخش «اهداف تبدیل» تعریف می‌کنید ثبت می‌شود.
           </p>
           <p class="form-error" id="conversion-error"></p>
 
@@ -245,18 +318,56 @@
 
           <div class="grid-2">
             <div class="panel">
-              <h2>قیف لندینگ → تبدیل</h2>
-              <p class="panel-note" style="margin-top:0">
-                از کدام صفحه وارد شدند و چند درصدشان تبدیل شدند.
-              </p>
+              <h2>قیف لندینگ → تبدیل <span class="panel-hint">(کلیک = جزئیات)</span></h2>
               <div class="table-wrap" id="funnel-table"></div>
             </div>
             <div class="panel">
               <h2>مسیر نشست‌های اخیر</h2>
-              <p class="panel-note" style="margin-top:0">
-                صفحات پشت‌سرهم تا تماس یا مشاوره.
-              </p>
               <div class="table-wrap" id="journey-table"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-goals" class="hidden">
+          <div class="topbar">
+            <h1>اهداف قابل تنظیم</h1>
+          </div>
+          <p class="panel-note">
+            بدون تغییر کد سایت، برای هر دکمه، لینک، فرم یا صفحهٔ تشکر هدف بسازید. اسکریپت <code dir="ltr">t.js</code> به‌صورت خودکار قوانین جدید را می‌خواند و در «تبدیل و گزارش» می‌آورد.
+          </p>
+
+          <div class="grid-2">
+            <form class="panel" id="goal-form">
+              <h2>افزودن هدف جدید</h2>
+              <div class="field">
+                <label for="goal-site">سایت</label>
+                <select id="goal-site" required></select>
+              </div>
+              <div class="field">
+                <label for="goal-name">نام هدف (نمایش در گزارش)</label>
+                <input id="goal-name" required placeholder="مثلاً: کلیک دکمه واتساپ هدر" />
+              </div>
+              <div class="field">
+                <label for="goal-type">شرط ثبت</label>
+                <select id="goal-type">
+                  <option value="click_text">کلیک روی دکمه/لینکی که متنش شامل این عبارت باشد</option>
+                  <option value="href_contains">کلیک روی لینکی که آدرسش شامل این عبارت باشد</option>
+                  <option value="url_contains">باز شدن صفحه‌ای که آدرسش شامل این عبارت باشد</option>
+                  <option value="click_selector">کلیک روی عنصر با سلکتور CSS (مثلاً .btn-whatsapp)</option>
+                  <option value="form_submit">ارسال فرمی که شناسه/کلاس/اکشن آن شامل این عبارت باشد</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="goal-value" id="goal-value-label">عبارت یا مقدار</label>
+                <input id="goal-value" required placeholder="مثلاً: مشاوره رایگان یا /thank-you یا wa.me" />
+              </div>
+              <p class="form-error" id="goal-form-error"></p>
+              <button type="submit" class="btn btn-primary" style="width: auto">ثبت هدف</button>
+            </form>
+
+            <div class="panel">
+              <h2>هدف‌های تعریف‌شده</h2>
+              <div class="table-wrap" id="goals-list"></div>
             </div>
           </div>
         </section>
@@ -271,10 +382,7 @@
             </div>
           </div>
           <p class="panel-note">
-            کلیک، اسکرول، زمان فعال، UTM و تبدیل با همان تگ اسکریپت ثبت می‌شود. برای هدف سفارشی روی دکمه:
-            <code dir="ltr">data-ia-goal="lead_form"</code>.
-            تماس تلفنی و واتساپ و صفحه مشاوره به‌صورت خودکار تبدیل حساب می‌شوند.
-            اگر LiteSpeed فایل را کپی کرد، یک‌بار Purge کنید.
+            کلیک، اسکرول، زمان فعال، UTM و تبدیل با همان تگ اسکریپت ثبت می‌شود. اگر LiteSpeed فایل را کپی کرد، یک‌بار Purge کنید.
           </p>
           <div class="panel">
             <div class="sites-list" id="sites-list"></div>
@@ -285,6 +393,7 @@
 
     <div id="modal-root" class="hidden"></div>
     <script src="./js/charts.js"></script>
+    <script src="./js/jalali.js"></script>
     <script src="./js/app.js"></script>
   </body>
 </html>

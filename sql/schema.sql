@@ -44,9 +44,21 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS goals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  goal_key TEXT NOT NULL,
+  match_type TEXT NOT NULL DEFAULT 'click_text',
+  match_value TEXT NOT NULL DEFAULT '',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_pageviews_site_created ON pageviews (site_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pageviews_site_path ON pageviews (site_id, path);
 CREATE INDEX IF NOT EXISTS idx_pageviews_site_referrer ON pageviews (site_id, referrer_host);
 CREATE INDEX IF NOT EXISTS idx_pageviews_session ON pageviews (site_id, session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_site_created ON events (site_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_site_name ON events (site_id, name);
+CREATE INDEX IF NOT EXISTS idx_goals_site ON goals (site_id, is_active);
