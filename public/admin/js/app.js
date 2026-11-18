@@ -79,20 +79,38 @@
     loginError.textContent = '';
     try {
       // Must be /auth/login (or /api/login alias) — not a protected /api/* route.
-      await api('/auth/login', {
+      const res = await fetch('/auth/login', {
         method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: document.getElementById('username').value,
           password: document.getElementById('password').value,
         }),
       });
+      const text = await res.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null;
+      }
+      if (!res.ok) {
+        if (data && data.error === 'invalid_credentials') {
+          throw new Error('bad_password');
+        }
+        throw new Error('login_failed');
+      }
       showApp();
       await bootstrap();
     } catch (err) {
-      loginError.textContent =
-        err && err.message === 'unauthorized'
-          ? 'نشست ذخیره نشد. اگر با HTTP باز کرده‌اید، COOKIE_SECURE=false بگذارید و سرویس را ری‌استارت کنید.'
-          : 'نام کاربری یا رمز عبور نادرست است.';
+      if (err && err.message === 'bad_password') {
+        loginError.textContent =
+          'نام کاربری یا رمز عبور نادرست است. رمز را با ADMIN_PASSWORD در /etc/iran-analytics.env یکی کنید.';
+      } else {
+        loginError.textContent =
+          'ورود انجام نشد. اگر سایت با HTTPS است COOKIE_SECURE=true و TRUST_PROXY=true باشد، بعد سرویس را ری‌استارت کنید.';
+      }
     }
   });
 
