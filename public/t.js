@@ -109,11 +109,27 @@
       if (value) found = true;
       next[pair[0]] = value;
     }
+    var ynPlat = clip(q.get('utm_yn_plt') || q.get('yn_plt'), 120);
+    var ynData = q.get('utm_yn_data') || q.get('yn_data');
+    if (ynPlat || ynData) {
+      found = true;
+      if (!next.source) next.source = ynPlat || 'yektanet';
+      if (!next.medium) next.medium = 'native';
+    }
     if (!found) return current;
     try {
       sessionStorage.setItem(utmKey, JSON.stringify(next));
     } catch (e) {}
     return next;
+  }
+
+  function isNoisePath() {
+    var p = (location.pathname || '').toLowerCase();
+    return (
+      p.indexOf('/wp-admin') === 0 ||
+      p.indexOf('/wp-login') === 0 ||
+      p.indexOf('/wp-json') === 0
+    );
   }
 
   function payload(extra) {
@@ -177,11 +193,12 @@
   }
 
   function trackPageview() {
+    if (isNoisePath()) return;
     send(payload({ type: 'pageview' }));
   }
 
   function trackEvent(name, props) {
-    if (!name) return;
+    if (!name || isNoisePath()) return;
     send(
       payload({
         type: 'event',
@@ -256,10 +273,10 @@
   }
 
   function onClick(e) {
-    if (!view || view.clicks >= MAX_CLICKS) return;
+    if (!view || view.clicks >= MAX_CLICKS || isNoisePath()) return;
     var t = e.target;
     if (!t || !t.closest) return;
-    if (t.closest('[data-ia-ignore]')) return;
+    if (t.closest('[data-ia-ignore], #wpadminbar, .wp-admin')) return;
     var field = t.closest('input, textarea, select, [contenteditable="true"]');
     if (field) {
       var submit = t.closest('button, input[type="submit"], input[type="button"]');

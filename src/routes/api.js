@@ -203,7 +203,9 @@ router.get('/stats/pages', async (req, res) => {
     const limP = `$${extraStart}`;
 
     const { rows } = await query(
-      `SELECT path, COUNT(*)::int AS views,
+      `SELECT path,
+              MAX(NULLIF(title, '')) AS title,
+              COUNT(*)::int AS views,
               COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions
        FROM pageviews
        WHERE created_at >= NOW() - (${daysP} || ' days')::interval
@@ -320,6 +322,7 @@ router.get('/stats/behavior', async (req, res) => {
 
     const pages = await query(
       `SELECT path,
+              MAX(NULLIF(title, '')) AS title,
               COUNT(*)::int AS views,
               AVG(CASE WHEN duration_ms > 0 THEN duration_ms END) AS avg_ms,
               AVG(CASE WHEN duration_ms > 0 OR scroll_depth > 0 THEN scroll_depth END) AS avg_scroll

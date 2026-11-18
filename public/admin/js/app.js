@@ -159,11 +159,36 @@
       .replace(/"/g, '&quot;');
   }
 
+  function prettyPath(path) {
+    let raw = String(path || '/');
+    const q = raw.indexOf('?');
+    if (q >= 0) raw = raw.slice(0, q);
+    try {
+      raw = decodeURIComponent(raw.replace(/\+/g, ' '));
+    } catch {
+      /* keep */
+    }
+    raw = raw.replace(/\/{2,}/g, '/');
+    if (raw.length > 90) raw = raw.slice(0, 87) + '…';
+    return raw || '/';
+  }
+
+  function pageLabel(row) {
+    const title = String(row.title || '')
+      .replace(/\s*[|\-–—].*$/, '')
+      .trim();
+    const path = prettyPath(row.path);
+    if (title && title.length >= 2 && title.toLowerCase() !== path.toLowerCase()) {
+      return { main: title.slice(0, 80), sub: path };
+    }
+    return { main: path, sub: '' };
+  }
+
   function embedSnippet(publicKey) {
     return `<script defer src="${origin}/t.js" data-site="${publicKey}" data-api="${origin}" data-no-optimize="1" data-no-minify="1"><\/script>`;
   }
 
-  function renderRankTable(el, rows, labelKey, valueKey) {
+  function renderRankTable(el, rows, labelKey, valueKey, opts = {}) {
     if (!rows.length) {
       el.innerHTML = '<p class="empty">داده‌ای نیست.</p>';
       return;
@@ -172,8 +197,17 @@
     el.innerHTML = `<table class="table"><thead><tr><th>عنوان</th><th>تعداد</th></tr></thead><tbody>${rows
       .map((r) => {
         const pct = Math.max(8, Math.round(((r[valueKey] || 0) / max) * 100));
+        let main = r[labelKey];
+        let sub = '';
+        if (opts.asPages) {
+          const label = pageLabel(r);
+          main = label.main;
+          sub = label.sub;
+        } else if (opts.prettyPath) {
+          main = prettyPath(main);
+        }
         return `<tr>
-          <td>${escapeHtml(r[labelKey])}</td>
+          <td>${escapeHtml(main)}${sub ? `<span class="cell-sub" dir="ltr">${escapeHtml(sub)}</span>` : ''}</td>
           <td><div class="bar-cell"><span>${faNum(r[valueKey])}</span><span class="bar" style="width:${pct}%"></span></div></td>
         </tr>`;
       })
@@ -230,7 +264,9 @@
     }));
     IACharts.donutChart(document.getElementById('chart-devices'), deviceSlices);
 
-    renderRankTable(document.getElementById('top-pages'), pages.pages || [], 'path', 'views');
+    renderRankTable(document.getElementById('top-pages'), pages.pages || [], 'path', 'views', {
+      asPages: true,
+    });
     renderRankTable(
       document.getElementById('top-referrers'),
       (referrers.referrers || []).map((r) => ({
@@ -361,8 +397,12 @@
         .map((row) => {
           const timed = Number(row.avg_ms) > 0;
           const scrolled = row.avg_scroll != null && row.avg_scroll !== '' && Number.isFinite(Number(row.avg_scroll));
+          const label = pageLabel(row);
           return `<tr>
-            <td dir="ltr">${escapeHtml(row.path)}</td>
+            <td>
+              ${escapeHtml(label.main)}
+              ${label.sub ? `<span class="cell-sub" dir="ltr">${escapeHtml(label.sub)}</span>` : ''}
+            </td>
             <td>${faNum(row.views)}</td>
             <td>${timed ? faDuration(row.avg_ms) : '—'}</td>
             <td>${scrolled ? faPct(row.avg_scroll) : '—'}</td>

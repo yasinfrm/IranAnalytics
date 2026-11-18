@@ -313,6 +313,18 @@ async function ensurePageviewColumns() {
   );
 }
 
+/** Rewrite stored paths that still carry ad/UTM junk or percent-encoded Persian. */
+async function cleanupStoredPaths() {
+  const { normalizePath } = await import('./path.js');
+  const { rows } = await query('SELECT DISTINCT path FROM pageviews LIMIT 2000');
+  for (const row of rows) {
+    const next = normalizePath(row.path);
+    if (!next || next === row.path) continue;
+    await query('UPDATE pageviews SET path = $1 WHERE path = $2', [next, row.path]);
+    await query('UPDATE events SET path = $1 WHERE path = $2', [next, row.path]);
+  }
+}
+
 export async function migrate() {
   if (!pgPool && !sqlite) await initDb();
   if (dialect === 'sqlite') {
@@ -325,6 +337,7 @@ export async function migrate() {
     await pgPool.query(sql);
   }
   await ensurePageviewColumns();
+  await cleanupStoredPaths();
 }
 
 export async function ping() {

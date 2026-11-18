@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { query } from '../lib/db.js';
 import { parseUa, referrerHost } from '../lib/ua.js';
+import { normalizePath, isNoisePath } from '../lib/path.js';
 
 const router = Router();
 
@@ -29,22 +30,6 @@ async function resolveSite(publicKey) {
   );
   return rows[0] || null;
 }
-
-const TRACKING_PARAMS = new Set([
-  'utm_source',
-  'utm_medium',
-  'utm_campaign',
-  'utm_term',
-  'utm_content',
-  'utm_id',
-  'gclid',
-  'fbclid',
-  'msclkid',
-  'mc_cid',
-  'mc_eid',
-  'igshid',
-  'si',
-]);
 
 function cleanToken(value, max) {
   return String(value ?? '')
@@ -81,30 +66,19 @@ function pickUtm(body, rawPath) {
   if (!src || typeof src !== 'object' || Array.isArray(src)) src = body || {};
   const q = queryFromPath(rawPath);
   const read = (short, full) => cleanToken(src[short] || src[full] || q.get(full) || '', 120);
-  return {
-    source: read('source', 'utm_source'),
-    medium: read('medium', 'utm_medium'),
-    campaign: read('campaign', 'utm_campaign'),
-    term: read('term', 'utm_term'),
-    content: read('content', 'utm_content'),
-  };
-}
+  let source = read('source', 'utm_source');
+  let medium = read('medium', 'utm_medium');
+  let campaign = read('campaign', 'utm_campaign');
+  let term = read('term', 'utm_term');
+  let content = read('content', 'utm_content');
 
-function normalizePath(p) {
-  if (!p || typeof p !== 'string') return '/';
-  let path = p.slice(0, 2048);
-  try {
-    const u = path.startsWith('http') ? new URL(path) : new URL(path, 'http://local');
-    for (const key of [...u.searchParams.keys()]) {
-      if (TRACKING_PARAMS.has(key.toLowerCase())) u.searchParams.delete(key);
-    }
-    const search = u.searchParams.toString();
-    path = u.pathname + (search ? `?${search}` : '');
-  } catch {
-    /* keep the sliced path */
-  }
-  if (!path.startsWith('/')) path = '/' + path;
-  return path.slice(0, 1024);
+  // Yektanet / native Iranian ad networks often skip classic utm_source.
+  const ynPlat = cleanToken(q.get('utm_yn_plt') || q.get('yn_plt') || '', 120);
+  if (!source && ynPlat) source = ynPlat;
+  if (!medium && (q.get('utm_yn_data') || q.get('yn_data'))) medium = 'native';
+  if (!source && (q.get('utm_yn_data') || q.get('yn_data'))) source = 'yektanet';
+
+  return { source, medium, campaign, term, content };
 }
 
 function cleanHref(value) {
@@ -161,12 +135,14 @@ async function ingestPageview(body, req) {
   const site = await resolveSite(key);
   if (!site) return { ok: false, status: 404, error: 'unknown_site' };
 
+  const rawPath = String(body.p || body.path || body.url || '/');
+  if (isNoisePath(rawPath)) return { ok: true };
+
   const ua = String(body.ua || req.headers['user-agent'] || '').slice(0, 512);
   const { browser, os, device } = parseUa(ua);
   const referrer = String(body.r || body.referrer || '').slice(0, 2048);
   const siteHost = site.domain || '';
   const refHost = referrerHost(referrer, siteHost);
-  const rawPath = String(body.p || body.path || body.url || '/');
   const utm = pickUtm(body, rawPath);
 
   await query(
@@ -227,11 +203,19 @@ async function ingestEvent(body) {
   const site = await resolveSite(key);
   if (!site) return { ok: false, status: 404, error: 'unknown_site' };
 
+  const rawPath = String(body.p || body.path || body.url || '/');
+  if (isNoisePath(rawPath)) return { ok: true };
+
   const name = cleanToken(body.n || body.name || body.event || '', 120);
   if (!name) return { ok: false, status: 400, error: 'missing_event_name' };
 
   const autoClick = body.auto === 1 || body.auto === '1' || body.auto === true;
   const props = sanitizeProps(name, body.props || body.data || {}, autoClick);
+  // WP admin bar / cache plugin clicks are noise for site analytics.
+  if (name === 'click' && autoClick) {
+    const href = String(props.href || '');
+    if (/\/wp-admin(?:\/|$)/i.test(href) || /\/wp-login\.php/i.test(href)) return { ok: true };
+  }
 
   await query(
     `INSERT INTO events (site_id, name, path, props, session_id)
@@ -239,7 +223,7 @@ async function ingestEvent(body) {
     [
       site.id,
       name,
-      normalizePath(body.p || body.path || body.url),
+      normalizePath(rawPath),
       JSON.stringify(props),
       String(body.sid || body.session || '').slice(0, 64),
     ]
