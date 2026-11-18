@@ -12,15 +12,21 @@
   var key = script && script.getAttribute('data-site');
   if (!key) return;
 
-  var src = script && script.src ? script.src : '';
-  var endpoint;
-  try {
-    endpoint = new URL(src).origin;
-  } catch (e) {
-    endpoint = '';
-  }
-  if (!endpoint && script && script.getAttribute('data-api')) {
+  // Filled in when /t.js is served. Survives cache plugins that copy the file
+  // onto the site's own domain and would otherwise post to the wrong host.
+  var baked = '__IA_ORIGIN__';
+  var endpoint = '';
+  if (script && script.getAttribute('data-api')) {
     endpoint = script.getAttribute('data-api').replace(/\/$/, '');
+  } else if (baked.indexOf('http') === 0) {
+    endpoint = baked.replace(/\/$/, '');
+  } else {
+    var src = script && script.src ? script.src : '';
+    try {
+      endpoint = new URL(src).origin;
+    } catch (e) {
+      endpoint = '';
+    }
   }
   if (!endpoint) return;
 

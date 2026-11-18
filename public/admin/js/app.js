@@ -160,7 +160,7 @@
   }
 
   function embedSnippet(publicKey) {
-    return `<script defer src="${origin}/t.js" data-site="${publicKey}"><\/script>`;
+    return `<script defer src="${origin}/t.js" data-site="${publicKey}" data-api="${origin}" data-no-optimize="1"><\/script>`;
   }
 
   function renderRankTable(el, rows, labelKey, valueKey) {

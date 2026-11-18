@@ -1,5 +1,6 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { initDb, migrate, ping, dialect, engine } from './lib/db.js';
@@ -27,10 +28,13 @@ async function main() {
   app.use('/', trackRoutes);
 
   app.get('/t.js', (req, res) => {
+    const host = String(req.get('host') || '').replace(/[^A-Za-z0-9.:\-[\]]/g, '');
+    const origin = host ? `${req.protocol}://${host}` : '';
+    const js = readFileSync(join(publicDir, 't.js'), 'utf8').replaceAll('__IA_ORIGIN__', origin);
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=300');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.sendFile(join(publicDir, 't.js'));
+    res.send(js);
   });
 
   // Login lives at /auth/*; also alias under /api/* (before the authed API router)
