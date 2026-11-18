@@ -120,7 +120,7 @@ router.get('/stats/overview', async (req, res) => {
       `SELECT
          COUNT(*)::int AS pageviews,
          COUNT(DISTINCT NULLIF(session_id, ''))::int AS sessions,
-         COUNT(DISTINCT path)::int AS unique_pages
+         COUNT(DISTINCT path)::int AS unique_pages,
          AVG(CASE WHEN duration_ms > 0 THEN duration_ms END) AS avg_ms,
          AVG(CASE WHEN duration_ms > 0 OR scroll_depth > 0 THEN scroll_depth END) AS avg_scroll,
          COALESCE(SUM(CASE

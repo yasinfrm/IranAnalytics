@@ -136,16 +136,18 @@
   function send(body) {
     var url = endpoint + '/collect';
     var json = JSON.stringify(body);
+    // text/plain avoids a CORS preflight. application/json beacons often die
+    // silently when the page is on another domain (WordPress / LiteSpeed copy).
     try {
       if (navigator.sendBeacon) {
-        var blob = new Blob([json], { type: 'application/json' });
+        var blob = new Blob([json], { type: 'text/plain;charset=UTF-8' });
         if (navigator.sendBeacon(url, blob)) return;
       }
     } catch (e) {}
     try {
       fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
         body: json,
         keepalive: true,
         mode: 'cors',

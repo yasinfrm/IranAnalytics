@@ -22,7 +22,18 @@ async function main() {
   if (TRUST_PROXY) app.set('trust proxy', 1);
 
   app.use(express.json({ limit: '32kb' }));
+  app.use(express.text({ type: ['text/plain', 'text/*'], limit: '32kb' }));
   app.use(express.urlencoded({ extended: false, limit: '32kb' }));
+  app.use((req, _res, next) => {
+    if (typeof req.body === 'string' && req.body.length) {
+      try {
+        req.body = JSON.parse(req.body);
+      } catch {
+        /* leave as string; routes will reject */
+      }
+    }
+    next();
+  });
   app.use(cookieParser());
 
   app.use('/', trackRoutes);
