@@ -134,6 +134,29 @@
     );
   }
 
+  /** Staff / opt-out: do not send events that would skew reports. */
+  function shouldIgnoreVisitor() {
+    try {
+      if (/[?&]ia_ignore=1(?:&|$)/.test(location.search || '')) {
+        try {
+          localStorage.setItem('ia_ignore', '1');
+        } catch (e0) {}
+        return true;
+      }
+      if (localStorage.getItem('ia_ignore') === '1') return true;
+      if (/(?:^|;\s*)ia_ignore=1(?:;|$)/.test(document.cookie || '')) return true;
+    } catch (e1) {}
+    try {
+      var b = document.body;
+      if (b && b.getAttribute && b.getAttribute('data-ia-ignore') === '1') return true;
+      // WordPress: logged-in users with admin bar (editors/admins browsing the site).
+      if (b && b.classList && b.classList.contains('logged-in')) {
+        if (b.classList.contains('admin-bar') || document.getElementById('wpadminbar')) return true;
+      }
+    } catch (e2) {}
+    return false;
+  }
+
   function payload(extra) {
     var data = {
       k: key,
@@ -831,6 +854,7 @@
   };
 
   function boot() {
+    if (shouldIgnoreVisitor() || isNoisePath()) return;
     view = makeView();
     syncUtm();
     measureScroll();
@@ -843,5 +867,8 @@
   } else {
     document.addEventListener('DOMContentLoaded', boot);
   }
-  window.addEventListener('load', measureScroll);
+  window.addEventListener('load', function () {
+    if (!view) return;
+    measureScroll();
+  });
 })();

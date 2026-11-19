@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Iran Analytics
  * Description: Loads the first-party Iran Analytics tracker without LiteSpeed minify/combine.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: Iran Analytics
  */
 
@@ -42,9 +42,25 @@ function iran_analytics_api_origin() {
   return $origin;
 }
 
+/**
+ * Skip tracking for staff so admin browsing does not skew reports.
+ * Default: anyone who can edit posts (sees the WP admin bar).
+ * Override: add_filter('iran_analytics_exclude_user', '__return_false');
+ */
+function iran_analytics_should_exclude_user() {
+  if (!is_user_logged_in()) {
+    return false;
+  }
+  $exclude = current_user_can('edit_posts');
+  return (bool) apply_filters('iran_analytics_exclude_user', $exclude);
+}
+
 add_action('wp_enqueue_scripts', function () {
   $key = iran_analytics_site_key();
   if (!$key) {
+    return;
+  }
+  if (iran_analytics_should_exclude_user()) {
     return;
   }
   $src = iran_analytics_src();
