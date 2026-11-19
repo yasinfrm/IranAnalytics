@@ -1023,17 +1023,41 @@
     if (heatmapFallbackSheet) heatmapFallbackSheet.style.opacity = on ? '0' : '0.7';
   }
 
+  function resetHeatmapScroll() {
+    const wrap = document.getElementById('heatmap-stage-wrap');
+    if (wrap) wrap.scrollTop = 0;
+    if (heatmapStage) heatmapStage.scrollTop = 0;
+  }
+
   function loadHeatmapPreviewFrame(path, renderW) {
     if (!heatmapIframe) return;
     const vw = renderW || 1280;
     const src = `/api/heatmap-preview?${filterQuery({ path, vw })}`;
-    if (heatmapPreviewSrc === src) return;
+    resetHeatmapScroll();
+    if (heatmapPreviewSrc === src) {
+      // Same URL (rare) — still jump preview to top after filter paint.
+      try {
+        heatmapIframe.contentWindow?.scrollTo(0, 0);
+      } catch {
+        /* cross-origin / empty */
+      }
+      return;
+    }
     heatmapPreviewSrc = src;
     heatmapLiveHeight = 0;
     setHeatmapLive(false);
     heatmapIframe.onload = () => {
       setHeatmapLive(true);
-      setTimeout(() => paintHeatmap(), 400);
+      resetHeatmapScroll();
+      try {
+        heatmapIframe.contentWindow?.scrollTo(0, 0);
+      } catch {
+        /* ignore */
+      }
+      setTimeout(() => {
+        resetHeatmapScroll();
+        paintHeatmap();
+      }, 400);
     };
     heatmapIframe.onerror = () => {
       setHeatmapLive(false);
@@ -1175,9 +1199,15 @@
   async function loadHeatmap() {
     if (!heatmapPage) return;
     heatmapError.textContent = '';
+    const prevPath = heatmapPath;
     await fillHeatmapPages();
     const path = heatmapPage.value || heatmapPath || '/';
     heatmapPath = path;
+    if (path !== prevPath) {
+      heatmapLiveHeight = 0;
+      heatmapPreviewSrc = '';
+    }
+    resetHeatmapScroll();
     saveState();
     try {
       const data = await api(
