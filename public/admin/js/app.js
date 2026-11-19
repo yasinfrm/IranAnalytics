@@ -1139,11 +1139,12 @@
     const size = sizeHeatmapStage(meta);
     if (heatmapMode === 'scroll') {
       drawScrollHeat(heatmapCache.scroll || [], meta.avg_fold, size);
-      heatmapEmpty.classList.add('hidden');
+      if (heatmapEmpty) heatmapEmpty.classList.add('hidden');
     } else {
       const clicks = heatmapCache.clicks || [];
       drawClickHeat(clicks, size);
-      heatmapEmpty.classList.toggle('hidden', clicks.length > 0 || !(meta.views > 0));
+      const hasCoords = Number(meta.clicks_with_coords) > 0 || clicks.length > 0;
+      if (heatmapEmpty) heatmapEmpty.classList.toggle('hidden', hasCoords || !(meta.views > 0));
     }
     renderHeatmapElements(heatmapCache.elements || [], heatmapMode);
   }

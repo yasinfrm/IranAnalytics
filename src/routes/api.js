@@ -1618,6 +1618,58 @@ function isBlockedPreviewHost(hostname) {
   return false;
 }
 
+function rewritePreviewMedia(html, baseHref) {
+  let out = String(html || '');
+  let base;
+  try {
+    base = new URL(baseHref);
+  } catch {
+    return out;
+  }
+
+  const toAbs = (raw) => {
+    const v = String(raw || '').trim();
+    if (!v || v.startsWith('data:') || v.startsWith('blob:') || v.startsWith('#') || v.startsWith('javascript:')) {
+      return v;
+    }
+    try {
+      return new URL(v, base).toString();
+    } catch {
+      return v;
+    }
+  };
+
+  const toProxy = (raw) => {
+    const abs = toAbs(raw);
+    if (!/^https?:\/\//i.test(abs)) return raw;
+    return `/api/heatmap-asset?u=${encodeURIComponent(abs)}`;
+  };
+
+  const rewriteSrcset = (value) =>
+    String(value)
+      .split(',')
+      .map((part) => {
+        const bits = part.trim().split(/\s+/);
+        if (!bits[0]) return part.trim();
+        bits[0] = toProxy(bits[0]);
+        return bits.join(' ');
+      })
+      .join(', ');
+
+  // Hotlink-protected logos/images fail when Referer is the analytics host — proxy them.
+  out = out.replace(
+    /\s(src|data-src|data-lazy-src|data-original|data-bg|data-large_image|data-thumb|poster)=(["'])([^"']+)\2/gi,
+    (_m, attr, q, val) => ` ${attr}=${q}${toProxy(val)}${q}`
+  );
+  out = out.replace(/\s(srcset|data-srcset)=(["'])([^"']+)\2/gi, (_m, attr, q, val) => {
+    return ` ${attr}=${q}${rewriteSrcset(val)}${q}`;
+  });
+  out = out.replace(/url\(\s*(['"]?)(https?:\/\/[^)'"\s]+)\1\s*\)/gi, (_m, _q, url) => {
+    return `url(${toProxy(url)})`;
+  });
+  return out;
+}
+
 function sanitizePreviewHtml(html, baseHref, renderWidth) {
   let out = String(html || '');
   const vw = Math.round(Math.max(320, Math.min(1600, Number(renderWidth) || 1280)));
@@ -1627,8 +1679,9 @@ function sanitizePreviewHtml(html, baseHref, renderWidth) {
   );
   out = out.replace(/<meta[^>]+http-equiv=["']?x-frame-options["']?[^>]*>/gi, '');
   out = out.replace(/<meta[^>]+name=["']?viewport["']?[^>]*>/gi, '');
-  // Prefer a single base so CSS/JS/images resolve against the live site.
+  // Prefer a single base so CSS/JS resolve against the live site.
   out = out.replace(/<base\b[^>]*>/gi, '');
+  out = rewritePreviewMedia(out, baseHref);
   const inject = `<meta name="viewport" content="width=${vw}">
 <base href="${baseHref.replace(/"/g, '&quot;')}">
 <style id="ia-hm-preview">html,body{scroll-behavior:auto!important;max-width:100%!important} a,button{cursor:default!important}</style>
@@ -1639,6 +1692,21 @@ function sanitizePreviewHtml(html, baseHref, renderWidth) {
     out = inject + out;
   }
   return out;
+}
+
+function hostAllowedForPreview(hostname, allowed) {
+  const host = String(hostname || '')
+    .toLowerCase()
+    .replace(/^www\./, '');
+  if (!host || isBlockedPreviewHost(host)) return false;
+  for (const d of allowed) {
+    const base = String(d || '')
+      .toLowerCase()
+      .replace(/^www\./, '');
+    if (!base) continue;
+    if (host === base || host.endsWith('.' + base)) return true;
+  }
+  return false;
 }
 
 router.get('/heatmap-preview', async (req, res) => {
@@ -1734,6 +1802,65 @@ router.get('/heatmap-preview', async (req, res) => {
   } catch (err) {
     console.error('heatmap-preview', err);
     res.status(502).send('preview_failed');
+  }
+});
+
+/** Proxy site images with a same-site Referer so hotlink protection does not blank logos. */
+router.get('/heatmap-asset', async (req, res) => {
+  try {
+    const raw = String(req.query.u || '').trim();
+    let url;
+    try {
+      url = new URL(raw);
+    } catch {
+      return res.status(400).send('bad_url');
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return res.status(400).send('bad_protocol');
+    }
+    const allowed = await allowedSiteHosts();
+    if (!hostAllowedForPreview(url.hostname, allowed)) {
+      return res.status(403).send('domain_not_allowed');
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    let upstream;
+    try {
+      upstream = await fetch(url.toString(), {
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+          Referer: `${url.origin}/`,
+          Origin: url.origin,
+        },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!upstream.ok) return res.status(502).send('upstream_error');
+    const ctype = String(upstream.headers.get('content-type') || 'application/octet-stream');
+    const looksImage =
+      /^image\//i.test(ctype) ||
+      /\.(png|jpe?g|gif|webp|svg|ico|avif|bmp)(\?|$)/i.test(url.pathname);
+    const looksFont = /^font\//i.test(ctype) || /\.(woff2?|ttf|otf)(\?|$)/i.test(url.pathname);
+    if (!looksImage && !looksFont && !/^application\/octet-stream/i.test(ctype)) {
+      return res.status(415).send('unsupported_type');
+    }
+
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    if (buf.length > 8_000_000) return res.status(413).send('too_large');
+    res.setHeader('Content-Type', ctype);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(buf);
+  } catch (err) {
+    console.error('heatmap-asset', err);
+    res.status(502).send('asset_failed');
   }
 });
 

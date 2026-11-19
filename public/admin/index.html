@@ -383,6 +383,9 @@
                 پیش‌نمایش با همان عرض مرورگر بازدیدکننده رندر می‌شود (بعد scale می‌شود) تا کلیک‌ها جابه‌جا نشوند.
                 <a id="heatmap-open-live" href="#" target="_blank" rel="noopener noreferrer" class="hidden">باز کردن صفحه واقعی ↗</a>
               </p>
+              <p class="empty heatmap-empty hidden" id="heatmap-empty">
+                هنوز کلیک مختصات‌دار برای این صفحه نیست. بعد از به‌روزرسانی t.js چند بازدید واقعی لازم است.
+              </p>
               <div class="heatmap-stage-wrap" id="heatmap-stage-wrap">
                 <div class="heatmap-stage" id="heatmap-stage">
                   <div class="hm-scale-outer" id="heatmap-scale-outer">
@@ -397,16 +400,12 @@
                           id="heatmap-iframe"
                           title="پیش‌نمایش زنده صفحه"
                           sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-                          referrerpolicy="no-referrer"
                         ></iframe>
                         <canvas id="heatmap-canvas" aria-hidden="true"></canvas>
                       </div>
                     </div>
                   </div>
                 </div>
-                <p class="empty heatmap-empty hidden" id="heatmap-empty">
-                  هنوز کلیک مختصات‌دار برای این صفحه نیست. بعد از به‌روزرسانی t.js چند بازدید واقعی لازم است.
-                </p>
               </div>
             </div>
             <div class="panel heatmap-side-panel">
