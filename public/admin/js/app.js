@@ -978,23 +978,30 @@
     const panelW = Math.max(280, (wrap?.clientWidth || 800) - 28);
     const renderW = heatmapRenderWidth(meta);
     const dh = Number(meta?.max_dh) || 0;
+    const chromeH = 40;
     let sheetH;
     if (heatmapLiveHeight > 200) {
-      sheetH = Math.max(420, Math.min(6000, Math.round(heatmapLiveHeight)));
+      sheetH = Math.max(420, Math.min(12000, Math.round(heatmapLiveHeight)));
     } else if (dh > 200) {
-      sheetH = Math.max(420, Math.min(4500, Math.round(dh)));
+      sheetH = Math.max(420, Math.min(12000, Math.round(dh)));
     } else {
-      sheetH = Math.max(480, Math.round(renderW * 1.15));
+      sheetH = Math.max(640, Math.round(renderW * 1.4));
     }
 
     const scale = Math.min(1, panelW / renderW);
+    const scaledW = Math.round(renderW * scale);
+    const scaledH = Math.round((chromeH + sheetH) * scale);
+
     if (heatmapScaleInner) {
       heatmapScaleInner.style.width = renderW + 'px';
+      heatmapScaleInner.style.height = chromeH + sheetH + 'px';
       heatmapScaleInner.style.transform = `scale(${scale})`;
+      heatmapScaleInner.style.transformOrigin = '0 0';
     }
     if (heatmapScaleOuter) {
-      // Reserve visual space after CSS scale (layout size stays pre-transform)
-      heatmapScaleOuter.style.height = Math.round((sheetH + 40) * scale) + 'px';
+      // Layout box = visual size after scale (transform itself does not shrink layout)
+      heatmapScaleOuter.style.width = scaledW + 'px';
+      heatmapScaleOuter.style.height = scaledH + 'px';
     }
     if (heatmapPageSheet) {
       heatmapPageSheet.style.width = renderW + 'px';
@@ -1221,8 +1228,9 @@
     if (!data || data.source !== 'ia-heatmap') return;
     const h = Number(data.height);
     if (!Number.isFinite(h) || h < 200) return;
-    if (Math.abs(h - heatmapLiveHeight) < 24) return;
-    heatmapLiveHeight = h;
+    // Always accept growth (late images/Elementor layouts); ignore tiny jitter.
+    if (h <= heatmapLiveHeight + 16 && Math.abs(h - heatmapLiveHeight) < 40) return;
+    heatmapLiveHeight = Math.max(heatmapLiveHeight, h);
     setHeatmapLive(true);
     if (currentView === 'heatmap' && heatmapCache) paintHeatmap();
   });

@@ -1169,12 +1169,15 @@ a {
 }
 
 .hm-scale-outer {
-  width: 100%;
+  direction: ltr;
   overflow: hidden;
+  margin: 0 auto;
+  /* width/height set in JS to scaled size so wrap can scroll the full page */
 }
 
 .hm-scale-inner {
-  transform-origin: top center;
+  direction: ltr;
+  transform-origin: 0 0; /* physical top-left — avoids RTL clipping the left half */
   will-change: transform;
 }
 
