@@ -1656,16 +1656,29 @@ function rewritePreviewMedia(html, baseHref) {
       })
       .join(', ');
 
-  // Hotlink-protected logos/images fail when Referer is the analytics host — proxy them.
-  out = out.replace(
-    /\s(src|data-src|data-lazy-src|data-original|data-bg|data-large_image|data-thumb|poster)=(["'])([^"']+)\2/gi,
-    (_m, attr, q, val) => ` ${attr}=${q}${toProxy(val)}${q}`
-  );
-  out = out.replace(/\s(srcset|data-srcset)=(["'])([^"']+)\2/gi, (_m, attr, q, val) => {
-    return ` ${attr}=${q}${rewriteSrcset(val)}${q}`;
-  });
-  out = out.replace(/url\(\s*(['"]?)(https?:\/\/[^)'"\s]+)\1\s*\)/gi, (_m, _q, url) => {
-    return `url(${toProxy(url)})`;
+  const rewriteAttrs = (attrs) => {
+    let next = attrs;
+    next = next.replace(
+      /\s(src|data-src|data-lazy-src|data-original|data-bg|data-large_image|data-thumb|poster)=(["'])([^"']*)\2/gi,
+      (_m, attr, q, val) => ` ${attr}=${q}${toProxy(val)}${q}`
+    );
+    next = next.replace(/\s(srcset|data-srcset)=(["'])([^"']*)\2/gi, (_m, attr, q, val) => {
+      return ` ${attr}=${q}${rewriteSrcset(val)}${q}`;
+    });
+    // Inline background images only (do NOT touch <style>/@font-face globally).
+    next = next.replace(/\sstyle=(["'])([\s\S]*?)\1/gi, (_m, q, style) => {
+      const rewritten = String(style).replace(
+        /url\(\s*(['"]?)(https?:\/\/[^)'"\s]+)\1\s*\)/gi,
+        (_u, _uq, url) => `url(${toProxy(url)})`
+      );
+      return ` style=${q}${rewritten}${q}`;
+    });
+    return next;
+  };
+
+  // Only media tags — never rewrite <script src> or stylesheet font urls.
+  out = out.replace(/<(img|source|video|audio|image)\b([^>]*)>/gi, (_m, tag, attrs) => {
+    return `<${tag}${rewriteAttrs(attrs)}>`;
   });
   return out;
 }
@@ -1843,18 +1856,18 @@ router.get('/heatmap-asset', async (req, res) => {
     }
 
     if (!upstream.ok) return res.status(502).send('upstream_error');
-    const ctype = String(upstream.headers.get('content-type') || 'application/octet-stream');
+    const ctype = String(upstream.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim();
+    const path = url.pathname.toLowerCase();
     const looksImage =
       /^image\//i.test(ctype) ||
-      /\.(png|jpe?g|gif|webp|svg|ico|avif|bmp)(\?|$)/i.test(url.pathname);
-    const looksFont = /^font\//i.test(ctype) || /\.(woff2?|ttf|otf)(\?|$)/i.test(url.pathname);
-    if (!looksImage && !looksFont && !/^application\/octet-stream/i.test(ctype)) {
+      /\.(png|jpe?g|gif|webp|svg|ico|avif|bmp)$/i.test(path);
+    if (!looksImage && !/^application\/octet-stream$/i.test(ctype)) {
       return res.status(415).send('unsupported_type');
     }
 
     const buf = Buffer.from(await upstream.arrayBuffer());
     if (buf.length > 8_000_000) return res.status(413).send('too_large');
-    res.setHeader('Content-Type', ctype);
+    res.setHeader('Content-Type', /^image\//i.test(ctype) ? ctype : 'application/octet-stream');
     res.setHeader('Cache-Control', 'private, max-age=300');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.send(buf);
