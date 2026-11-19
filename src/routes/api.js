@@ -1694,8 +1694,10 @@ function sanitizePreviewHtml(html, baseHref, renderWidth) {
   out = out.replace(/<meta[^>]+name=["']?viewport["']?[^>]*>/gi, '');
   // Prefer a single base so CSS/JS resolve against the live site.
   out = out.replace(/<base\b[^>]*>/gi, '');
-  out = rewritePreviewMedia(out, baseHref);
+  // LiteSpeed hotlink: Referer=stats.* → 403, empty Referer → 200.
+  // Rely on iframe referrerpolicy=no-referrer + meta below (do not rewrite img src).
   const inject = `<meta name="viewport" content="width=${vw}">
+<meta name="referrer" content="no-referrer">
 <base href="${baseHref.replace(/"/g, '&quot;')}">
 <style id="ia-hm-preview">html,body{scroll-behavior:auto!important;max-width:100%!important} a,button{cursor:default!important}</style>
 <script id="ia-hm-height">(function(){function s(){try{var doc=document.documentElement,body=document.body;var h=Math.max(doc?doc.scrollHeight:0,doc?doc.offsetHeight:0,body?body.scrollHeight:0,body?body.offsetHeight:0,800);var nodes=body?body.children:[];for(var i=0;i<nodes.length&&i<80;i++){var r=nodes[i].getBoundingClientRect();if(r&&r.bottom)h=Math.max(h,Math.ceil(r.bottom+(window.scrollY||0)));}parent.postMessage({source:'ia-heatmap',height:h,width:${vw}},'*');}catch(e){}}window.addEventListener('load',s);window.addEventListener('resize',s);setInterval(s,1200);setTimeout(s,400);setTimeout(s,1200);setTimeout(s,3000);s();})();</script>`;
