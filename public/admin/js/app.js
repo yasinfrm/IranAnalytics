@@ -31,11 +31,23 @@
   const goalFormErr = document.getElementById('goal-form-error');
   const goalsList = document.getElementById('goals-list');
 
+  const visitorSearch = document.getElementById('visitor-search');
+  const visitorOnlyConv = document.getElementById('visitor-only-conv');
+  const visitorsList = document.getElementById('visitors-list');
+  const visitorsLayout = document.getElementById('visitors-layout');
+  const visitorTimelineRoot = document.getElementById('visitor-timeline-root');
+  const visitorsCount = document.getElementById('visitors-count');
+  const visitorsError = document.getElementById('visitors-error');
+  const visitorBackBtn = document.getElementById('visitor-back-btn');
+
   let sites = [];
   let origin = location.origin;
   let currentView = 'dashboard';
   let prevView = 'dashboard';
   let currentPagePath = '';
+  let currentVisitorSid = '';
+  let visitorsCache = [];
+  let visitorSearchTimer = null;
   let pendingDesired = { site: 'all', source: 'all', campaign: 'all' };
 
   function loadSavedState() {
@@ -48,7 +60,7 @@
     try {
       if (location.hash && location.hash.length > 1) {
         const hp = new URLSearchParams(location.hash.slice(1));
-        for (const k of ['site', 'from', 'to', 'source', 'campaign', 'view', 'pagePath', 'exportType']) {
+        for (const k of ['site', 'from', 'to', 'source', 'campaign', 'view', 'pagePath', 'sid', 'exportType']) {
           if (hp.has(k)) saved[k] = hp.get(k);
         }
       }
@@ -67,6 +79,7 @@
       campaign: fCampaign.value || 'all',
       view: currentView,
       pagePath: currentPagePath || '',
+      sid: currentVisitorSid || '',
       exportType: exportType.value || 'pages',
     };
     try {
@@ -83,6 +96,7 @@
       if (state.source !== 'all') hp.set('source', state.source);
       if (state.campaign !== 'all') hp.set('campaign', state.campaign);
       if (state.view === 'page' && state.pagePath) hp.set('pagePath', state.pagePath);
+      if (state.view === 'visitors' && state.sid) hp.set('sid', state.sid);
       history.replaceState(null, '', '#' + hp.toString());
     } catch {
       /* ignore */
@@ -108,6 +122,7 @@
     campaign: savedInit.campaign || 'all',
   };
   if (savedInit.pagePath) currentPagePath = savedInit.pagePath;
+  if (savedInit.sid) currentVisitorSid = savedInit.sid;
   if (savedInit.exportType) exportType.value = savedInit.exportType;
 
   const picker = IAJalali.createRangePicker(
@@ -288,7 +303,7 @@
   }
 
   function setView(name, opts = {}) {
-    const valid = new Set(['dashboard', 'behavior', 'page', 'conversions', 'goals', 'sites']);
+    const valid = new Set(['dashboard', 'behavior', 'page', 'visitors', 'conversions', 'goals', 'sites']);
     const target = valid.has(name) ? name : 'dashboard';
     if (target === 'page' && !currentPagePath) {
       return setView('dashboard', opts);
@@ -307,15 +322,19 @@
     document.getElementById('view-dashboard').classList.toggle('hidden', target !== 'dashboard');
     document.getElementById('view-behavior').classList.toggle('hidden', target !== 'behavior');
     document.getElementById('view-page').classList.toggle('hidden', target !== 'page');
+    document.getElementById('view-visitors').classList.toggle('hidden', target !== 'visitors');
     document.getElementById('view-conversions').classList.toggle('hidden', target !== 'conversions');
     document.getElementById('view-goals').classList.toggle('hidden', target !== 'goals');
     document.getElementById('view-sites').classList.toggle('hidden', target !== 'sites');
 
     if (!opts.keepExport) {
       if (target === 'behavior') exportType.value = 'sources';
+      else if (target === 'visitors') exportType.value = 'visitors';
       else if (target === 'conversions') exportType.value = 'conversions';
       else if (target === 'dashboard') exportType.value = 'pages';
     }
+
+    if (target !== 'visitors' && visitorsLayout) visitorsLayout.classList.remove('has-detail');
 
     saveState();
     reloadCurrentView();
@@ -328,6 +347,7 @@
       if (currentView === 'dashboard') await loadDashboard();
       else if (currentView === 'behavior') await loadBehavior();
       else if (currentView === 'page') await loadPageDetail(currentPagePath);
+      else if (currentView === 'visitors') await loadVisitors();
       else if (currentView === 'conversions') await loadConversions();
       else if (currentView === 'goals') await loadGoals();
       else if (currentView === 'sites') renderSites();
@@ -355,6 +375,30 @@
   document.getElementById('page-back-btn').addEventListener('click', () => {
     setView(prevView || 'dashboard');
   });
+
+  if (visitorSearch) {
+    visitorSearch.addEventListener('input', () => {
+      clearTimeout(visitorSearchTimer);
+      visitorSearchTimer = setTimeout(() => {
+        if (currentView === 'visitors') loadVisitors();
+      }, 280);
+    });
+  }
+  if (visitorOnlyConv) {
+    visitorOnlyConv.addEventListener('change', () => {
+      if (currentView === 'visitors') loadVisitors();
+    });
+  }
+  if (visitorBackBtn) {
+    visitorBackBtn.addEventListener('click', () => {
+      currentVisitorSid = '';
+      visitorsLayout.classList.remove('has-detail');
+      visitorsList.querySelectorAll('.visitor-card').forEach((btn) => btn.classList.remove('is-active'));
+      visitorTimelineRoot.innerHTML =
+        '<p class="empty">یک کاربر را از لیست انتخاب کنید تا تایم‌لاین کاملش نمایش داده شود.</p>';
+      saveState();
+    });
+  }
 
   fSite.addEventListener('change', () => {
     pendingDesired.site = fSite.value;
@@ -387,6 +431,9 @@
     location.href = `/api/export.csv?${filterQuery({
       report: rep,
       path: rep === 'page_detail' ? currentPagePath : '',
+      sid: rep === 'visitor' ? currentVisitorSid : '',
+      q: rep === 'visitors' ? visitorSearch.value || '' : '',
+      only_converted: rep === 'visitors' && visitorOnlyConv.checked ? '1' : '',
     })}`;
   }
   exportBtn.addEventListener('click', downloadExport);
@@ -812,6 +859,228 @@
           </tr>`
         )
         .join('')}</tbody></table>`;
+    }
+  }
+
+  function formatOffset(ms) {
+    if (ms == null || ms === '') return '';
+    const s = Math.max(0, Math.round(Number(ms) / 1000));
+    if (s < 60) return 'ثانیه ' + faNum(s);
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return r ? faNum(m) + ':' + String(r).padStart(2, '0') : faNum(m) + ' دقیقه';
+  }
+
+  function stepText(step) {
+    const p = step.props || {};
+    if (step.kind === 'pageview') {
+      return `ورود به صفحه · ماندن ${faDuration(step.duration_ms || 0)} · اسکرول تا ${faPct(step.scroll_depth || 0)}`;
+    }
+    if (step.kind === 'scroll') return `اسکرول به ${faPct(p.pct || 0)} رسید`;
+    if (step.kind === 'video') {
+      const act =
+        p.action === 'pause' ? 'توقف ویدیو' : p.action === 'ended' ? 'پایان ویدیو' : p.action === 'click' ? 'کلیک روی ویدیو' : 'پخش ویدیو';
+      const sec = p.sec ? ` (ثانیه ${faNum(p.sec)})` : '';
+      return `${act}: ${p.title || 'ویدیو'}${sec}`;
+    }
+    if (step.kind === 'form_start') return `شروع پر کردن فرم «${p.form || 'فرم'}»${p.field ? ' · فیلد: ' + p.field : ''}`;
+    if (step.kind === 'form_submit') return `ارسال فرم «${p.form || 'فرم'}»`;
+    if (step.kind === 'click') {
+      const bits = ['کلیک'];
+      if (p.text) bits.push(`«${p.text}»`);
+      if (p.href) bits.push(p.href);
+      if (Number(p.outbound) === 1) bits.push('(خروجی)');
+      return bits.join(' ');
+    }
+    if (step.kind === 'conversion') {
+      return `تبدیل: ${goalLabel(p.goal, step.goal_name)}${p.text ? ' · ' + p.text : ''}`;
+    }
+    return step.kind;
+  }
+
+  function renderVisitorTimeline(data) {
+    if (!data || !data.profile) {
+      visitorTimelineRoot.innerHTML =
+        '<p class="empty">تایم‌لاین این کاربر پیدا نشد. ممکن است فیلتر بازه/منبع باعث مخفی شدن جزئیات شده باشد.</p>';
+      return;
+    }
+    const p = data.profile;
+    const chapters = data.chapters || [];
+    const camp = [p.source ? sourceLabel(p.source) : '', p.medium, p.campaign].filter(Boolean).join(' · ');
+
+    visitorTimelineRoot.innerHTML = `
+      <div class="visitor-profile-head">
+        <div>
+          <div class="visitor-card-top" style="margin-bottom:8px">
+            <span class="ip-badge">${escapeHtml(p.ip || 'آی‌پی نامشخص')}</span>
+            ${p.conversions_count ? '<span class="pill">تبدیل‌شده</span>' : '<span class="pill warn">بدون تبدیل</span>'}
+          </div>
+          <div class="visitor-meta">
+            <span>${escapeHtml(camp || 'ورود مستقیم')}</span>
+            <span>${escapeHtml(deviceLabel(p.device))}</span>
+            <span>${escapeHtml(p.browser || 'مرورگر نامشخص')}</span>
+            <span>${escapeHtml(p.os || '')}</span>
+          </div>
+          <p class="site-meta">${escapeHtml(IAJalali.toFaDigits(p.started_jalali || ''))}${
+            p.last_jalali ? ' تا ' + escapeHtml(IAJalali.toFaDigits(p.last_jalali)) : ''
+          }</p>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="visitor-export-btn">خروجی Excel تایم‌لاین</button>
+      </div>
+      <div class="visitor-summary-row">
+        <div class="v-mini-stat"><span>صفحات</span><strong>${faNum(p.pages_count)}</strong></div>
+        <div class="v-mini-stat"><span>زمان کل</span><strong>${faDuration(p.total_ms)}</strong></div>
+        <div class="v-mini-stat"><span>بیشترین اسکرول</span><strong>${faPct(p.max_scroll)}</strong></div>
+        <div class="v-mini-stat"><span>کلیک / ویدیو / فرم</span><strong>${faNum(p.clicks_count)} / ${faNum(
+      p.videos_count
+    )} / ${faNum(p.forms_count)}</strong></div>
+      </div>
+      <div class="timeline-chapters">${chapters
+        .map((ch, idx) => {
+          const label = pageLabel({ path: ch.path, title: ch.title });
+          const events = ch.events || [];
+          return `<article class="tl-chapter">
+            <div class="tl-chapter-head">
+              <div>
+                <div class="tl-chapter-title">${faNum(idx + 1)}. ${escapeHtml(label.main)}</div>
+                <span class="cell-sub" dir="ltr">${escapeHtml(ch.path)}</span>
+                <div class="visitor-chips" style="margin-top:6px">
+                  <span class="v-chip">${escapeHtml(sourceLabel(ch.source))}</span>
+                  ${ch.utm_campaign ? `<span class="v-chip brass">${escapeHtml(ch.utm_campaign)}</span>` : ''}
+                  <span class="v-chip">ماندن ${faDuration(ch.duration_ms)}</span>
+                  <span class="v-chip">اسکرول ${faPct(ch.scroll_depth)}</span>
+                </div>
+              </div>
+              <span class="cell-sub">${escapeHtml(IAJalali.toFaDigits(ch.jalali_at || ''))}</span>
+            </div>
+            ${
+              events.length
+                ? `<ul class="tl-events">${events
+                    .map((ev) => {
+                      const fakeStep = {
+                        kind: ev.name,
+                        props: ev.props,
+                        goal_name: ev.goal_name,
+                        duration_ms: 0,
+                        scroll_depth: 0,
+                      };
+                      return `<li class="tl-item kind-${escapeHtml(ev.name)}">
+                        <span class="tl-text">${escapeHtml(stepText(fakeStep))}</span>
+                        <span class="tl-offset">${
+                          ev.ms != null
+                            ? escapeHtml(formatOffset(ev.ms))
+                            : escapeHtml(IAJalali.toFaDigits((ev.jalali_at || '').slice(11) || ''))
+                        }</span>
+                      </li>`;
+                    })
+                    .join('')}</ul>`
+                : '<p class="empty" style="padding:10px 0 0">رویدادی روی این صفحه ثبت نشده (فقط بازدید).</p>'
+            }
+          </article>`;
+        })
+        .join('')}</div>`;
+
+    const exportBtnLocal = document.getElementById('visitor-export-btn');
+    if (exportBtnLocal) {
+      exportBtnLocal.addEventListener('click', () => {
+        location.href = `/api/export.csv?${filterQuery({ report: 'visitor', sid: p.session_id })}`;
+      });
+    }
+  }
+
+  async function openVisitorTimeline(sid) {
+    if (!sid) return;
+    currentVisitorSid = sid;
+    visitorsLayout.classList.add('has-detail');
+    visitorsList.querySelectorAll('.visitor-card').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.sid === sid);
+    });
+    visitorTimelineRoot.innerHTML = '<p class="empty">در حال بارگذاری تایم‌لاین...</p>';
+    saveState();
+    try {
+      const data = await api(`/api/stats/visitor?${filterQuery({ sid })}`);
+      renderVisitorTimeline(data);
+    } catch (err) {
+      if (!err || err.message !== 'unauthorized') {
+        visitorTimelineRoot.innerHTML = '<p class="empty">بارگذاری تایم‌لاین ناموفق بود.</p>';
+      }
+    }
+  }
+
+  function renderVisitorsList(list) {
+    visitorsCount.textContent = list.length ? faNum(list.length) + ' نشست' : '';
+    if (!list.length) {
+      visitorsList.innerHTML = '<p class="empty">در این بازه/فیلتر کاربری نیست.</p>';
+      if (!currentVisitorSid) {
+        visitorTimelineRoot.innerHTML =
+          '<p class="empty">یک کاربر را از لیست انتخاب کنید تا تایم‌لاین کاملش نمایش داده شود.</p>';
+      }
+      return;
+    }
+
+    visitorsList.innerHTML = list
+      .map((v) => {
+        const camp = [v.source ? sourceLabel(v.source) : '', v.medium, v.campaign].filter(Boolean).join(' · ');
+        const landing = pageLabel({ path: v.landing_path, title: v.landing_title });
+        return `<button type="button" class="visitor-card ${
+          currentVisitorSid === v.session_id ? 'is-active' : ''
+        }" data-sid="${escapeHtml(v.session_id)}">
+          <div class="visitor-card-top">
+            <span class="ip-badge">${escapeHtml(v.ip || 'آی‌پی نامشخص')}</span>
+            ${
+              v.conversions
+                ? `<span class="pill">${escapeHtml(v.goals[0] || 'تبدیل')}</span>`
+                : '<span class="pill warn">بدون تبدیل</span>'
+            }
+          </div>
+          <div class="visitor-meta">
+            <span>${escapeHtml(camp || 'ورود مستقیم')}</span>
+            <span>${escapeHtml(deviceLabel(v.device))}</span>
+            <span>${escapeHtml(IAJalali.toFaDigits((v.started_jalali || '').slice(0, 16)))}</span>
+          </div>
+          <div class="visitor-chips">
+            <span class="v-chip">${escapeHtml(landing.main)}</span>
+            <span class="v-chip">${faNum(v.pages_count)} صفحه</span>
+            <span class="v-chip">${faDuration(v.total_ms)}</span>
+            <span class="v-chip">اسکرول ${faPct(v.max_scroll)}</span>
+            ${v.clicks ? `<span class="v-chip">${faNum(v.clicks)} کلیک</span>` : ''}
+            ${v.videos ? `<span class="v-chip brass">${faNum(v.videos)} ویدیو</span>` : ''}
+            ${v.forms ? `<span class="v-chip">${faNum(v.forms)} فرم</span>` : ''}
+            ${v.conversions ? `<span class="v-chip good">${faNum(v.conversions)} تبدیل</span>` : ''}
+          </div>
+        </button>`;
+      })
+      .join('');
+
+    visitorsList.querySelectorAll('[data-sid]').forEach((btn) => {
+      btn.addEventListener('click', () => openVisitorTimeline(btn.dataset.sid));
+    });
+  }
+
+  async function loadVisitors() {
+    visitorsError.textContent = '';
+    try {
+      const q = filterQuery({
+        q: visitorSearch.value || '',
+        only_converted: visitorOnlyConv.checked ? '1' : '',
+        limit: 50,
+      });
+      const data = await api(`/api/stats/visitors?${q}`);
+      visitorsCache = data.visitors || [];
+      renderVisitorsList(visitorsCache);
+      if (currentVisitorSid) {
+        const stillThere = visitorsCache.some((v) => v.session_id === currentVisitorSid);
+        if (stillThere) await openVisitorTimeline(currentVisitorSid);
+        else {
+          currentVisitorSid = '';
+          visitorsLayout.classList.remove('has-detail');
+          visitorTimelineRoot.innerHTML =
+            '<p class="empty">یک کاربر را از لیست انتخاب کنید تا تایم‌لاین کاملش نمایش داده شود.</p>';
+          saveState();
+        }
+      }
+    } catch (err) {
+      if (!err || err.message !== 'unauthorized') visitorsError.textContent = 'بارگذاری کاربران ناموفق بود.';
     }
   }
 

@@ -65,6 +65,24 @@ function cleanViewId(value) {
   return /^[A-Za-z0-9_-]{6,64}$/.test(id) ? id : '';
 }
 
+function extractIp(req) {
+  const cf = req.headers['cf-connecting-ip'];
+  const xff = req.headers['x-forwarded-for'];
+  const xri = req.headers['x-real-ip'];
+  let raw = '';
+  if (typeof cf === 'string' && cf.trim()) raw = cf.trim();
+  else if (typeof xff === 'string' && xff.trim()) raw = xff.split(',')[0].trim();
+  else if (typeof xri === 'string' && xri.trim()) raw = xri.trim();
+  else raw = String(req.ip || req.socket?.remoteAddress || '');
+  return raw.replace(/^::ffff:/i, '').slice(0, 64);
+}
+
+function clampMs(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(n, 30 * 60 * 1000);
+}
+
 function queryFromPath(path) {
   try {
     const u = new URL(path, 'http://local');
@@ -135,6 +153,31 @@ function sanitizeProps(name, raw, autoClick) {
       id: cleanToken(props.id, 80),
       name: cleanToken(props.name, 80),
       outbound: props.outbound === 1 || props.outbound === '1' || props.outbound === true ? 1 : 0,
+      ms: clampMs(props.ms),
+    };
+  }
+
+  if (name === 'scroll' && autoClick) {
+    const pct = Math.max(0, Math.min(100, Math.round(Number(props.pct) || 0)));
+    return { pct, ms: clampMs(props.ms) };
+  }
+
+  if (name === 'video' && autoClick) {
+    return {
+      action: cleanToken(props.action || 'play', 20),
+      title: cleanToken(props.title, 100),
+      src: cleanHref(props.src) || cleanToken(props.src, 200),
+      sec: Math.max(0, Math.round(Number(props.sec) || 0)),
+      ms: clampMs(props.ms),
+    };
+  }
+
+  if ((name === 'form_start' || name === 'form_submit') && autoClick) {
+    return {
+      form: cleanToken(props.form, 100),
+      field: cleanToken(props.field, 80),
+      action: cleanHref(props.action) || cleanToken(props.action, 200),
+      ms: clampMs(props.ms),
     };
   }
 
@@ -149,6 +192,7 @@ function sanitizeProps(name, raw, autoClick) {
       campaign: cleanToken(props.campaign, 120),
       term: cleanToken(props.term, 120),
       content: cleanToken(props.content, 120),
+      ms: clampMs(props.ms),
     };
   }
 
@@ -181,12 +225,13 @@ async function ingestPageview(body, req) {
   const siteHost = site.domain || '';
   const refHost = referrerHost(referrer, siteHost);
   const utm = pickUtm(body, rawPath);
+  const ip = extractIp(req);
 
   await query(
     `INSERT INTO pageviews
-      (site_id, path, title, referrer, referrer_host, ua, browser, os, device, session_id,
+      (site_id, path, title, referrer, referrer_host, ua, browser, os, device, ip, session_id,
        view_id, utm_source, utm_medium, utm_campaign, utm_term, utm_content)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
     [
       site.id,
       normalizePath(rawPath),
@@ -197,6 +242,7 @@ async function ingestPageview(body, req) {
       browser.slice(0, 120),
       os.slice(0, 120),
       device.slice(0, 40),
+      ip,
       String(body.sid || body.session || '').slice(0, 64),
       cleanViewId(body.vid || body.view_id),
       utm.source,
@@ -255,14 +301,15 @@ async function ingestEvent(body) {
   }
 
   await query(
-    `INSERT INTO events (site_id, name, path, props, session_id)
-     VALUES ($1,$2,$3,$4::jsonb,$5)`,
+    `INSERT INTO events (site_id, name, path, props, session_id, view_id)
+     VALUES ($1,$2,$3,$4::jsonb,$5,$6)`,
     [
       site.id,
       name,
       normalizePath(rawPath),
       JSON.stringify(props),
       String(body.sid || body.session || '').slice(0, 64),
+      cleanViewId(body.vid || body.view_id),
     ]
   );
   return { ok: true };

@@ -52,6 +52,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17h3v-7H3v7zm5 0h3V7H8v10zm5 0h3v-4h-3v4zm5 0h3V4h-3v13z"/></svg>
             <span>رفتار و منابع</span>
           </button>
+          <button type="button" data-view="visitors">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5z"/></svg>
+            <span>تایم‌لاین کاربران</span>
+          </button>
           <button type="button" data-view="conversions">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8V2zm1 2.07V11l4.95 4.95 1.41-1.41L15 10.17V4.07z"/></svg>
             <span>تبدیل و گزارش</span>
@@ -97,6 +101,7 @@
                 <option value="pages">خروجی صفحه‌ها</option>
                 <option value="sources">خروجی منابع</option>
                 <option value="campaigns">خروجی کمپین‌ها</option>
+                <option value="visitors">خروجی کاربران</option>
                 <option value="clicks">خروجی کلیک‌ها</option>
                 <option value="conversions">خروجی تبدیل‌ها</option>
               </select>
@@ -292,6 +297,50 @@
             <div class="panel">
               <h2>هدف‌های ثبت‌شده روی این صفحه</h2>
               <div class="table-wrap" id="pd-goals-table"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-visitors" class="hidden">
+          <div class="topbar">
+            <div>
+              <h1>تایم‌لاین رفتار کاربران</h1>
+              <p class="topbar-sub">
+                روی هر کاربر کلیک کنید تا از لحظه ورود (با آی‌پی، منبع، کمپین، اسکرول، ویدیو، فرم و کلیک) قدم‌به‌قدم ببینید چه کار کرده است.
+              </p>
+            </div>
+            <div class="topbar-actions">
+              <input
+                id="visitor-search"
+                type="search"
+                class="chip-select visitor-search-input"
+                placeholder="جستجو با آی‌پی، منبع، کمپین یا صفحه..."
+                aria-label="جستجوی کاربر"
+              />
+              <label class="chip-select toggle-chip">
+                <input type="checkbox" id="visitor-only-conv" />
+                <span>فقط تبدیل‌شده‌ها</span>
+              </label>
+            </div>
+          </div>
+          <p class="form-error" id="visitors-error"></p>
+
+          <div class="visitors-layout" id="visitors-layout">
+            <div class="panel visitors-list-panel">
+              <div class="panel-head-row">
+                <h2>نشست‌های اخیر</h2>
+                <span class="panel-hint" id="visitors-count"></span>
+              </div>
+              <div class="visitors-list" id="visitors-list"></div>
+            </div>
+
+            <div class="panel visitor-detail-panel" id="visitor-detail-panel">
+              <div class="visitor-mobile-back">
+                <button type="button" class="btn btn-ghost btn-sm" id="visitor-back-btn">→ لیست کاربران</button>
+              </div>
+              <div id="visitor-timeline-root">
+                <p class="empty">یک کاربر را از لیست انتخاب کنید تا تایم‌لاین کاملش نمایش داده شود.</p>
+              </div>
             </div>
           </div>
         </section>

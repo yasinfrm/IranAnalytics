@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS pageviews (
   os TEXT NOT NULL DEFAULT '',
   device TEXT NOT NULL DEFAULT 'desktop',
   country TEXT NOT NULL DEFAULT '',
+  ip TEXT NOT NULL DEFAULT '',
   session_id TEXT NOT NULL DEFAULT '',
   view_id TEXT NOT NULL DEFAULT '',
   utm_source TEXT NOT NULL DEFAULT '',
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS events (
   path TEXT NOT NULL DEFAULT '/',
   props JSONB NOT NULL DEFAULT '{}',
   session_id TEXT NOT NULL DEFAULT '',
+  view_id TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

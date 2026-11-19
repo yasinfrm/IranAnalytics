@@ -252,11 +252,13 @@
 
   function trackEvent(name, props) {
     if (!name || isNoisePath()) return;
+    var p = props && typeof props === 'object' ? Object.assign({}, props) : {};
+    if (p.ms == null) p.ms = elapsedMs();
     send(
       payload({
         type: 'event',
         n: String(name).slice(0, 120),
-        props: props && typeof props === 'object' ? props : {},
+        props: p,
       })
     );
   }
@@ -271,7 +273,17 @@
       sentScroll: -1,
       clicks: 0,
       goals: {},
+      scrollMarks: {},
+      formsStarted: {},
+      videoMarks: {},
     };
+  }
+
+  function elapsedMs() {
+    if (!view) return 0;
+    var extra = view.lastTick && !document.hidden ? Date.now() - view.lastTick : 0;
+    var total = view.acc + extra;
+    return total > MAX_MS ? MAX_MS : total < 0 ? 0 : total;
   }
 
   function tick() {
@@ -280,6 +292,8 @@
     if (view.acc > MAX_MS) view.acc = MAX_MS;
     view.lastTick = document.hidden ? 0 : Date.now();
   }
+
+  var SCROLL_STEPS = [20, 40, 60, 80, 100];
 
   function measureScroll() {
     if (!view) return;
@@ -291,6 +305,23 @@
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     if (pct > view.scroll) view.scroll = pct;
+
+    if (window.scrollY > 12 && !isNoisePath()) {
+      for (var i = 0; i < SCROLL_STEPS.length; i++) {
+        var step = SCROLL_STEPS[i];
+        if (pct >= step && !view.scrollMarks[step]) {
+          view.scrollMarks[step] = 1;
+          send(
+            payload({
+              type: 'event',
+              n: 'scroll',
+              auto: 1,
+              props: { pct: step, ms: elapsedMs() },
+            })
+          );
+        }
+      }
+    }
   }
 
   function flush() {
@@ -372,9 +403,116 @@
             campaign: utm.campaign || '',
             term: utm.term || '',
             content: utm.content || '',
+            ms: elapsedMs(),
           },
           props && typeof props === 'object' ? props : {}
         ),
+      })
+    );
+  }
+
+  function videoInfo(el) {
+    if (!el) return { title: 'ویدیو', src: '' };
+    var src = el.currentSrc || el.getAttribute('src') || '';
+    if (!src) {
+      var sourceEl = el.querySelector && el.querySelector('source[src], iframe[src], video[src]');
+      if (sourceEl) src = sourceEl.getAttribute('src') || '';
+    }
+    var widget = el.closest && el.closest('.elementor-widget-video');
+    if (!src && widget) {
+      var ifrm = widget.querySelector('iframe[src], video[src]');
+      if (ifrm) src = ifrm.getAttribute('src') || '';
+      if (!src) {
+        try {
+          var ds = JSON.parse(widget.getAttribute('data-settings') || '{}');
+          src = ds.youtube_url || ds.vimeo_url || (ds.hosted_url && ds.hosted_url.url) || ds.dailymotion_url || '';
+        } catch (e) {}
+      }
+    }
+    var title =
+      clip(
+        el.getAttribute('data-ia-video') ||
+          (widget && widget.getAttribute('data-ia-video')) ||
+          el.getAttribute('title') ||
+          el.getAttribute('aria-label'),
+        80
+      ) || '';
+    if (!title && src) {
+      try {
+        var clean = src.split('?')[0].split('/').pop();
+        if (clean) title = clip(decodeURIComponent(clean), 80);
+      } catch (e) {}
+    }
+    return { title: title || 'ویدیو', src: clip(src, 200) };
+  }
+
+  function formLabel(form) {
+    if (!form) return 'فرم';
+    var named = clip(form.getAttribute('data-ia') || form.getAttribute('aria-label') || form.getAttribute('name'), 80);
+    if (named) return named;
+    if (form.id) return clip(form.id, 60);
+    var heading = form.querySelector && form.querySelector('h1,h2,h3,h4,legend');
+    if (heading) return clip(heading.innerText || heading.textContent, 60);
+    var sub = form.querySelector && form.querySelector('button[type="submit"], input[type="submit"]');
+    if (sub) return clip(sub.innerText || sub.value || sub.textContent, 60);
+    return 'فرم صفحه';
+  }
+
+  function fieldLabel(el) {
+    if (!el) return '';
+    var placeholder = el.getAttribute('placeholder') || el.getAttribute('aria-label') || el.getAttribute('name') || el.id;
+    return clip(placeholder, 60);
+  }
+
+  function onVideoEvent(action, e) {
+    if (!view || isNoisePath()) return;
+    var el = e.target;
+    if (!el || !el.tagName || el.tagName.toLowerCase() !== 'video') return;
+    var info = videoInfo(el);
+    var markKey = action + ':' + (info.src || info.title);
+    if (action === 'pause' && (el.currentTime || 0) < 1) return;
+    if (action !== 'pause' && view.videoMarks[markKey]) return;
+    view.videoMarks[markKey] = 1;
+    send(
+      payload({
+        type: 'event',
+        n: 'video',
+        auto: 1,
+        props: {
+          action: action,
+          title: info.title,
+          src: info.src,
+          sec: Math.round(el.currentTime || 0),
+          ms: elapsedMs(),
+        },
+      })
+    );
+  }
+
+  function onFocusIn(e) {
+    if (!view || isNoisePath()) return;
+    var t = e.target;
+    if (!t || !t.tagName) return;
+    var tag = t.tagName.toLowerCase();
+    if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') return;
+    var type = (t.getAttribute('type') || '').toLowerCase();
+    if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'search') return;
+    if (t.closest('[data-ia-ignore], #wpadminbar, .wp-admin')) return;
+    var form = t.closest('form');
+    if (!form) return;
+    var fKey = form.id || form.getAttribute('name') || form.getAttribute('action') || String(Array.prototype.indexOf.call(document.forms, form));
+    if (view.formsStarted[fKey]) return;
+    view.formsStarted[fKey] = 1;
+    send(
+      payload({
+        type: 'event',
+        n: 'form_start',
+        auto: 1,
+        props: {
+          form: formLabel(form),
+          field: fieldLabel(t),
+          ms: elapsedMs(),
+        },
       })
     );
   }
@@ -390,6 +528,25 @@
       if (!submit) return;
       t = submit;
     }
+    var videoEl = t.closest('video, .elementor-video, .elementor-custom-embed-image-overlay, .elementor-custom-embed-play, .wp-video, .plyr, [data-ia-video]');
+    if (videoEl) {
+      var vInfo = videoInfo(videoEl);
+      send(
+        payload({
+          type: 'event',
+          n: 'video',
+          auto: 1,
+          props: {
+            action: 'click',
+            title: vInfo.title,
+            src: vInfo.src,
+            sec: 0,
+            ms: elapsedMs(),
+          },
+        })
+      );
+    }
+
     var el = t.closest('a, button, [role="button"], input[type="submit"], input[type="button"], summary, [data-ia]');
     if (!el || el.closest('[data-ia-ignore]')) return;
 
@@ -423,6 +580,7 @@
           id: clip(el.id, 80),
           name: clip(el.getAttribute('data-ia'), 80),
           outbound: outbound,
+          ms: elapsedMs(),
         },
       })
     );
@@ -503,10 +661,24 @@
         goal = 'form_lead';
       }
     }
+    var fName = formLabel(form);
+    send(
+      payload({
+        type: 'event',
+        n: 'form_submit',
+        auto: 1,
+        props: {
+          form: fName,
+          action: clip(form.getAttribute('action') || location.pathname, 200),
+          ms: elapsedMs(),
+        },
+      })
+    );
+
     if (goal) {
       trackConversion(goal, {
         el: 'form',
-        text: clip(form.getAttribute('name') || form.id || 'form', 80),
+        text: fName,
         href: clip(form.getAttribute('action') || location.pathname, 300),
       });
     }
@@ -542,6 +714,10 @@
 
   document.addEventListener('click', onClick, true);
   document.addEventListener('submit', onSubmit, true);
+  document.addEventListener('focusin', onFocusIn, true);
+  document.addEventListener('play', function (e) { onVideoEvent('play', e); }, true);
+  document.addEventListener('pause', function (e) { onVideoEvent('pause', e); }, true);
+  document.addEventListener('ended', function (e) { onVideoEvent('ended', e); }, true);
   window.addEventListener('scroll', measureScroll, { passive: true });
   window.addEventListener('resize', measureScroll);
   document.addEventListener('visibilitychange', function () {

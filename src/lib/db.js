@@ -279,6 +279,7 @@ export async function query(text, params = []) {
 }
 
 const PAGEVIEW_EXTRA_COLUMNS = [
+  ['ip', "TEXT NOT NULL DEFAULT ''"],
   ['view_id', "TEXT NOT NULL DEFAULT ''"],
   ['utm_source', "TEXT NOT NULL DEFAULT ''"],
   ['utm_medium', "TEXT NOT NULL DEFAULT ''"],
@@ -289,17 +290,24 @@ const PAGEVIEW_EXTRA_COLUMNS = [
   ['scroll_depth', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
-/** Add engagement/UTM columns on databases created before this release. */
+const EVENT_EXTRA_COLUMNS = [['view_id', "TEXT NOT NULL DEFAULT ''"]];
+
+/** Add engagement/UTM/IP/view_id columns on databases created before this release. */
 async function ensurePageviewColumns() {
   if (dialect === 'sqlite') {
     const have = new Set(sqlite.all('PRAGMA table_info(pageviews)').map((row) => row.name));
     for (const [name, ddl] of PAGEVIEW_EXTRA_COLUMNS) {
       if (!have.has(name)) sqlite.exec(`ALTER TABLE pageviews ADD COLUMN ${name} ${ddl}`);
     }
+    const haveEv = new Set(sqlite.all('PRAGMA table_info(events)').map((row) => row.name));
+    for (const [name, ddl] of EVENT_EXTRA_COLUMNS) {
+      if (!haveEv.has(name)) sqlite.exec(`ALTER TABLE events ADD COLUMN ${name} ${ddl}`);
+    }
     sqlite.exec('CREATE INDEX IF NOT EXISTS idx_pageviews_view ON pageviews (site_id, view_id)');
     sqlite.exec(
       'CREATE INDEX IF NOT EXISTS idx_pageviews_campaign ON pageviews (site_id, utm_campaign, utm_source)'
     );
+    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_events_session ON events (site_id, session_id, created_at)');
     if (sqlite.flush) sqlite.flush();
     return;
   }
@@ -307,9 +315,15 @@ async function ensurePageviewColumns() {
   for (const [name, ddl] of PAGEVIEW_EXTRA_COLUMNS) {
     await pgPool.query(`ALTER TABLE pageviews ADD COLUMN IF NOT EXISTS ${name} ${ddl}`);
   }
+  for (const [name, ddl] of EVENT_EXTRA_COLUMNS) {
+    await pgPool.query(`ALTER TABLE events ADD COLUMN IF NOT EXISTS ${name} ${ddl}`);
+  }
   await pgPool.query('CREATE INDEX IF NOT EXISTS idx_pageviews_view ON pageviews (site_id, view_id)');
   await pgPool.query(
     'CREATE INDEX IF NOT EXISTS idx_pageviews_campaign ON pageviews (site_id, utm_campaign, utm_source)'
+  );
+  await pgPool.query(
+    'CREATE INDEX IF NOT EXISTS idx_events_session ON events (site_id, session_id, created_at)'
   );
 }
 

@@ -1083,6 +1083,348 @@ router.get('/stats/journeys', async (req, res) => {
   }
 });
 
+// —— Visitor Sessions & Step-by-Step Timeline ——
+
+function parseProps(raw) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      return p && typeof p === 'object' ? p : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+async function computeVisitorsList(req) {
+  const f = buildFilters(req);
+  const limit = Math.min(Number(req.query.limit) || 50, 100);
+  const search = String(req.query.q || '').trim().toLowerCase().slice(0, 100);
+  const onlyConv = req.query.only_converted === '1' || req.query.only_converted === 'true';
+
+  const params = [...f.pvParams];
+  const extraParts = [];
+  if (search) {
+    const idx = params.push(`%${search}%`);
+    extraParts.push(
+      `(LOWER(p.ip) LIKE $${idx} OR LOWER(p.session_id) LIKE $${idx} OR LOWER(p.path) LIKE $${idx} OR LOWER(p.utm_source) LIKE $${idx} OR LOWER(p.utm_campaign) LIKE $${idx} OR LOWER(p.referrer_host) LIKE $${idx})`
+    );
+  }
+  const whereClause = extraParts.length ? `${f.pvWhere} AND ${extraParts.join(' AND ')}` : f.pvWhere;
+
+  const sessionsRes = await query(
+    `SELECT p.session_id,
+            MIN(p.created_at) AS started_at,
+            MAX(p.created_at) AS last_at,
+            COUNT(*)::int AS pages_count,
+            COALESCE(SUM(p.duration_ms), 0)::int AS total_ms,
+            COALESCE(MAX(p.scroll_depth), 0)::int AS max_scroll,
+            MAX(NULLIF(p.ip, '')) AS ip,
+            MAX(NULLIF(p.device, '')) AS device,
+            MAX(NULLIF(p.browser, '')) AS browser,
+            MAX(NULLIF(p.os, '')) AS os,
+            MAX(NULLIF(p.utm_source, '')) AS utm_source,
+            MAX(NULLIF(p.utm_medium, '')) AS utm_medium,
+            MAX(NULLIF(p.utm_campaign, '')) AS utm_campaign,
+            MAX(NULLIF(p.referrer_host, '')) AS referrer_host
+     FROM pageviews p
+     WHERE ${whereClause}
+       AND p.session_id <> ''
+     GROUP BY p.session_id
+     ORDER BY last_at DESC
+     LIMIT ${onlyConv ? 200 : limit}`,
+    params
+  );
+
+  const sids = sessionsRes.rows.map((r) => r.session_id).filter(Boolean);
+  if (!sids.length) return { days: f.range.days, visitors: [] };
+
+  const pvPlaceholders = sids.map((_, i) => `$${f.pvParams.length + i + 1}`).join(',');
+  const pageRows = await query(
+    `SELECT p.session_id, p.path, p.title, ${sourceSqlExpr('p')} AS channel, p.created_at, p.id
+     FROM pageviews p
+     WHERE ${f.pvWhere} AND p.session_id IN (${pvPlaceholders})
+     ORDER BY p.created_at ASC, p.id ASC`,
+    [...f.pvParams, ...sids]
+  );
+
+  const evPlaceholders = sids.map((_, i) => `$${f.evParams.length + i + 1}`).join(',');
+  const evRows = await query(
+    `SELECT e.session_id, e.name, e.props
+     FROM events e
+     WHERE ${f.evWhere} AND e.session_id IN (${evPlaceholders})`,
+    [...f.evParams, ...sids]
+  );
+
+  const pagesBySid = new Map();
+  for (const row of pageRows.rows) {
+    if (!pagesBySid.has(row.session_id)) pagesBySid.set(row.session_id, []);
+    pagesBySid.get(row.session_id).push(row);
+  }
+
+  const statsBySid = new Map();
+  const nameMap = await customGoalNamesMap(f.siteId);
+  for (const row of evRows.rows) {
+    if (!statsBySid.has(row.session_id)) {
+      statsBySid.set(row.session_id, {
+        clicks: 0,
+        videos: 0,
+        forms: 0,
+        conversions: 0,
+        goals: new Set(),
+      });
+    }
+    const st = statsBySid.get(row.session_id);
+    if (row.name === 'click') st.clicks += 1;
+    else if (row.name === 'video') st.videos += 1;
+    else if (row.name === 'form_start' || row.name === 'form_submit') st.forms += 1;
+    else if (row.name === 'conversion') {
+      st.conversions += 1;
+      const props = parseProps(row.props);
+      const gk = props.goal || 'goal';
+      st.goals.add(nameMap[gk] || gk);
+    }
+  }
+
+  let visitors = sessionsRes.rows.map((s) => {
+    const pages = pagesBySid.get(s.session_id) || [];
+    const first = pages[0];
+    const last = pages[pages.length - 1];
+    const ev = statsBySid.get(s.session_id) || {
+      clicks: 0,
+      videos: 0,
+      forms: 0,
+      conversions: 0,
+      goals: new Set(),
+    };
+    const channel = first?.channel || s.utm_source || s.referrer_host || 'direct';
+    return {
+      session_id: s.session_id,
+      ip: s.ip || '',
+      device: s.device || 'desktop',
+      browser: s.browser || '',
+      os: s.os || '',
+      source: channel,
+      medium: s.utm_medium || '',
+      campaign: s.utm_campaign || '',
+      referrer_host: s.referrer_host || '',
+      started_at: s.started_at,
+      started_jalali: formatTimestampJalali(s.started_at),
+      last_jalali: formatTimestampJalali(s.last_at),
+      pages_count: Number(s.pages_count) || pages.length,
+      total_ms: Number(s.total_ms) || 0,
+      max_scroll: Number(s.max_scroll) || 0,
+      landing_path: first?.path || '/',
+      landing_title: first?.title || '',
+      last_path: last?.path || '/',
+      clicks: ev.clicks,
+      videos: ev.videos,
+      forms: ev.forms,
+      conversions: ev.conversions,
+      goals: [...ev.goals],
+    };
+  });
+
+  if (onlyConv) {
+    visitors = visitors.filter((v) => v.conversions > 0);
+  }
+  return { days: f.range.days, visitors: visitors.slice(0, limit) };
+}
+
+async function computeVisitorTimeline(req) {
+  const sid = String(req.query.sid || '').trim().slice(0, 64);
+  if (!sid) return null;
+  const siteId = String(req.query.site || 'all').trim();
+
+  const pvParams = [sid];
+  let pvWhere = 'p.session_id = $1';
+  if (siteId && siteId !== 'all') {
+    pvParams.push(siteId);
+    pvWhere += ' AND p.site_id = $2';
+  }
+
+  const pvRes = await query(
+    `SELECT p.id, p.site_id, p.path, p.title, p.referrer, p.referrer_host,
+            p.browser, p.os, p.device, p.ip, p.view_id,
+            p.utm_source, p.utm_medium, p.utm_campaign, p.utm_term, p.utm_content,
+            p.duration_ms, p.scroll_depth, p.created_at,
+            ${sourceSqlExpr('p')} AS channel
+     FROM pageviews p
+     WHERE ${pvWhere}
+     ORDER BY p.created_at ASC, p.id ASC
+     LIMIT 200`,
+    pvParams
+  );
+
+  if (!pvRes.rows.length) return { profile: null, chapters: [], steps: [] };
+
+  const evParams = [sid];
+  let evWhere = 'e.session_id = $1';
+  if (siteId && siteId !== 'all') {
+    evParams.push(siteId);
+    evWhere += ' AND e.site_id = $2';
+  }
+
+  const evRes = await query(
+    `SELECT e.id, e.name, e.path, e.props, e.view_id, e.created_at
+     FROM events e
+     WHERE ${evWhere}
+       AND e.name <> 'engage'
+     ORDER BY e.created_at ASC, e.id ASC
+     LIMIT 600`,
+    evParams
+  );
+
+  const nameMap = await customGoalNamesMap(siteId);
+  const byViewId = new Map();
+  const orphanEvents = [];
+
+  for (const row of evRes.rows) {
+    const props = parseProps(row.props);
+    const evObj = {
+      id: row.id,
+      name: row.name,
+      path: row.path,
+      props,
+      view_id: row.view_id || '',
+      created_at: row.created_at,
+      jalali_at: formatTimestampJalali(row.created_at),
+      ms: Number.isFinite(Number(props.ms)) ? Number(props.ms) : null,
+      goal_name: row.name === 'conversion' ? nameMap[props.goal] || '' : '',
+    };
+    if (evObj.view_id) {
+      if (!byViewId.has(evObj.view_id)) byViewId.set(evObj.view_id, []);
+      byViewId.get(evObj.view_id).push(evObj);
+    } else {
+      orphanEvents.push(evObj);
+    }
+  }
+
+  const chapters = pvRes.rows.map((pv) => {
+    let events = [];
+    if (pv.view_id && byViewId.has(pv.view_id)) {
+      events = [...byViewId.get(pv.view_id)];
+      byViewId.delete(pv.view_id);
+    }
+    return {
+      id: pv.id,
+      view_id: pv.view_id || '',
+      path: pv.path,
+      title: pv.title || '',
+      source: pv.channel || 'direct',
+      utm_source: pv.utm_source || '',
+      utm_medium: pv.utm_medium || '',
+      utm_campaign: pv.utm_campaign || '',
+      referrer_host: pv.referrer_host || '',
+      duration_ms: Number(pv.duration_ms) || 0,
+      scroll_depth: Number(pv.scroll_depth) || 0,
+      created_at: pv.created_at,
+      jalali_at: formatTimestampJalali(pv.created_at),
+      events,
+    };
+  });
+
+  // Any leftover view_id-tagged events (rare race) fall into orphan attachment.
+  for (const leftover of byViewId.values()) {
+    orphanEvents.push(...leftover);
+  }
+  byViewId.clear();
+
+  // Attach any events without view_id to the latest matching-path chapter at/before event time.
+  for (const ev of orphanEvents) {
+    let target = chapters[0];
+    for (let i = chapters.length - 1; i >= 0; i--) {
+      if (chapters[i].created_at <= ev.created_at && (chapters[i].path === ev.path || i === 0)) {
+        target = chapters[i];
+        break;
+      }
+    }
+    if (target) target.events.push(ev);
+  }
+
+  const steps = [];
+  for (const ch of chapters) {
+    ch.events.sort((a, b) => {
+      if (a.ms != null && b.ms != null && a.ms !== b.ms) return a.ms - b.ms;
+      if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
+      return (a.id || 0) - (b.id || 0);
+    });
+
+    steps.push({
+      kind: 'pageview',
+      jalali_at: ch.jalali_at,
+      offset_ms: 0,
+      path: ch.path,
+      title: ch.title,
+      source: ch.source,
+      campaign: ch.utm_campaign,
+      duration_ms: ch.duration_ms,
+      scroll_depth: ch.scroll_depth,
+    });
+
+    for (const ev of ch.events) {
+      steps.push({
+        kind: ev.name,
+        jalali_at: ev.jalali_at,
+        offset_ms: ev.ms,
+        path: ev.path,
+        props: ev.props,
+        goal_name: ev.goal_name,
+      });
+    }
+  }
+
+  const first = pvRes.rows[0];
+  const last = pvRes.rows[pvRes.rows.length - 1];
+  const tagged = pvRes.rows.find((p) => p.utm_source || p.utm_medium || p.utm_campaign) || first;
+
+  const profile = {
+    session_id: sid,
+    ip: pvRes.rows.find((p) => p.ip)?.ip || '',
+    device: first.device || 'desktop',
+    browser: first.browser || '',
+    os: first.os || '',
+    source: tagged.channel || first.channel || 'direct',
+    medium: tagged.utm_medium || '',
+    campaign: tagged.utm_campaign || '',
+    referrer_host: first.referrer_host || '',
+    started_jalali: formatTimestampJalali(first.created_at),
+    last_jalali: formatTimestampJalali(last.created_at),
+    pages_count: chapters.length,
+    total_ms: chapters.reduce((sum, c) => sum + c.duration_ms, 0),
+    max_scroll: chapters.reduce((m, c) => Math.max(m, c.scroll_depth), 0),
+    clicks_count: evRes.rows.filter((e) => e.name === 'click').length,
+    videos_count: evRes.rows.filter((e) => e.name === 'video').length,
+    forms_count: evRes.rows.filter((e) => e.name === 'form_start' || e.name === 'form_submit').length,
+    conversions_count: evRes.rows.filter((e) => e.name === 'conversion').length,
+  };
+
+  return { profile, chapters, steps };
+}
+
+router.get('/stats/visitors', async (req, res) => {
+  try {
+    const result = await computeVisitorsList(req);
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+router.get('/stats/visitor', async (req, res) => {
+  try {
+    const data = await computeVisitorTimeline(req);
+    if (!data) return res.status(400).json({ error: 'sid_required' });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
 // —— Excel-friendly CSV Export (UTF-8 BOM) ——
 
 function csvEscape(val) {
@@ -1175,6 +1517,51 @@ router.get('/export.csv', async (req, res) => {
       csv = toCsv(
         ['عنوان دکمه/لینک', 'آدرس مقصد', 'خروجی', 'تعداد کلیک'],
         rows.map((r) => [r.label, r.href, Number(r.outbound) === 1 ? 'بله' : 'خیر', r.count])
+      );
+    } else if (report === 'visitors') {
+      const data = await computeVisitorsList(req);
+      csv = toCsv(
+        ['آی‌پی', 'شروع (شمسی)', 'منبع', 'کمپین', 'دستگاه', 'مرورگر', 'صفحات', 'زمان کل (ثانیه)', 'بیشترین اسکرول (%)', 'کلیک', 'ویدیو', 'فرم', 'تبدیل', 'صفحه ورود'],
+        data.visitors.map((v) => [
+          v.ip || 'نامشخص',
+          v.started_jalali,
+          v.source,
+          v.campaign,
+          v.device,
+          v.browser,
+          v.pages_count,
+          fmtSec(v.total_ms),
+          v.max_scroll,
+          v.clicks,
+          v.videos,
+          v.forms,
+          v.conversions,
+          v.landing_path,
+        ])
+      );
+    } else if (report === 'visitor') {
+      const data = await computeVisitorTimeline(req);
+      const steps = data?.steps || [];
+      csv = toCsv(
+        ['زمان (شمسی)', 'ثانیه در صفحه', 'نوع', 'صفحه', 'جزئیات'],
+        steps.map((st) => {
+          let detail = '';
+          if (st.kind === 'pageview') detail = `ورود به صفحه (${fmtSec(st.duration_ms)} ثانیه، اسکرول ${st.scroll_depth}%)`;
+          else if (st.kind === 'scroll') detail = `اسکرول تا ${st.props?.pct || 0}%`;
+          else if (st.kind === 'video') detail = `ویدیو (${st.props?.action || 'play'}): ${st.props?.title || ''}`;
+          else if (st.kind === 'form_start') detail = `شروع فرم: ${st.props?.form || ''}`;
+          else if (st.kind === 'form_submit') detail = `ارسال فرم: ${st.props?.form || ''}`;
+          else if (st.kind === 'click') detail = `کلیک: ${st.props?.text || ''} ${st.props?.href || ''}`.trim();
+          else if (st.kind === 'conversion') detail = `تبدیل: ${st.goal_name || st.props?.goal || ''} ${st.props?.text || ''}`.trim();
+          else detail = `${st.kind}: ${JSON.stringify(st.props || {})}`;
+          return [
+            st.jalali_at,
+            st.offset_ms != null ? Math.round(st.offset_ms / 1000) : '',
+            st.kind,
+            st.path,
+            detail,
+          ];
+        })
       );
     } else if (report === 'page_detail') {
       const detail = await computePageDetail(req);
