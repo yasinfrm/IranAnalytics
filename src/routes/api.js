@@ -1346,6 +1346,26 @@ async function computeVisitorTimeline(req) {
 
   const steps = [];
   for (const ch of chapters) {
+    const scrollEvMax = ch.events
+      .filter((e) => e.name === 'scroll')
+      .reduce((m, e) => Math.max(m, Number(e.props?.pct) || 0), 0);
+    if (scrollEvMax > ch.scroll_depth) ch.scroll_depth = scrollEvMax;
+
+    // Older visits / engage-only: still show "اسکرول تا X٪" like a normal step.
+    if (ch.scroll_depth >= 10 && !ch.events.some((e) => e.name === 'scroll')) {
+      ch.events.push({
+        id: 0,
+        name: 'scroll',
+        path: ch.path,
+        props: { pct: ch.scroll_depth, ms: ch.duration_ms || null },
+        view_id: ch.view_id,
+        created_at: ch.created_at,
+        jalali_at: ch.jalali_at,
+        ms: ch.duration_ms || null,
+        goal_name: '',
+      });
+    }
+
     ch.events.sort((a, b) => {
       if (a.ms != null && b.ms != null && a.ms !== b.ms) return a.ms - b.ms;
       if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;

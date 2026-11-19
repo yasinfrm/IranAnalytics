@@ -21,7 +21,11 @@ async function main() {
   console.log(`Database migrated (${dialect}/${engine})`);
 
   const app = express();
-  if (TRUST_PROXY) app.set('trust proxy', 1);
+  // LiteSpeed/nginx → Node: trust X-Forwarded-For / X-Real-IP so visitor IPs aren't blank.
+  if (TRUST_PROXY) {
+    const hops = Number(process.env.TRUST_PROXY_HOPS);
+    app.set('trust proxy', Number.isFinite(hops) && hops > 0 ? hops : true);
+  }
 
   app.use(express.json({ limit: '32kb' }));
   app.use(express.text({ type: ['text/plain', 'text/*'], limit: '32kb' }));

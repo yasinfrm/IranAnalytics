@@ -295,21 +295,55 @@
 
   var SCROLL_STEPS = [20, 40, 60, 80, 100];
 
-  function measureScroll() {
-    if (!view) return;
+  function elScrollPct(el) {
+    if (!el) return 0;
+    var max = (el.scrollHeight || 0) - (el.clientHeight || 0);
+    if (max <= 8) return 0;
+    var top = el.scrollTop || 0;
+    var pct = Math.round((top / max) * 100);
+    if (pct < 0) return 0;
+    if (pct > 100) return 100;
+    return pct;
+  }
+
+  /** Window + Elementor/overflow containers — many WP themes never move window.scrollY. */
+  function computeScrollPct() {
     var doc = document.documentElement;
     var body = document.body;
-    var height = Math.max(doc ? doc.scrollHeight : 0, body ? body.scrollHeight : 0);
-    var max = height - window.innerHeight;
-    var pct = max <= 8 ? 100 : Math.round((window.scrollY / max) * 100);
-    if (pct < 0) pct = 0;
-    if (pct > 100) pct = 100;
+    var se = document.scrollingElement || doc;
+    var height = Math.max(
+      se ? se.scrollHeight : 0,
+      doc ? doc.scrollHeight : 0,
+      body ? body.scrollHeight : 0
+    );
+    var maxWin = height - window.innerHeight;
+    var winPct = maxWin <= 8 ? 100 : Math.round(((window.scrollY || se.scrollTop || 0) / maxWin) * 100);
+    var best = winPct;
+    var nodes = [se, doc, body];
+    try {
+      var extras = document.querySelectorAll(
+        '.elementor, .elementor-location-single, .elementor-section, .e-con, main, #content, #page, .site-content, [data-elementor-type]'
+      );
+      for (var i = 0; i < extras.length && i < 40; i++) nodes.push(extras[i]);
+    } catch (e) {}
+    for (var j = 0; j < nodes.length; j++) {
+      var p = elScrollPct(nodes[j]);
+      if (p > best) best = p;
+    }
+    if (best < 0) best = 0;
+    if (best > 100) best = 100;
+    return best;
+  }
+
+  function measureScroll() {
+    if (!view) return;
+    var pct = computeScrollPct();
     if (pct > view.scroll) view.scroll = pct;
 
-    if (window.scrollY > 12 && !isNoisePath()) {
+    if (view.scroll >= 20 && !isNoisePath()) {
       for (var i = 0; i < SCROLL_STEPS.length; i++) {
         var step = SCROLL_STEPS[i];
-        if (pct >= step && !view.scrollMarks[step]) {
+        if (view.scroll >= step && !view.scrollMarks[step]) {
           view.scrollMarks[step] = 1;
           send(
             payload({
@@ -718,6 +752,8 @@
   document.addEventListener('play', function (e) { onVideoEvent('play', e); }, true);
   document.addEventListener('pause', function (e) { onVideoEvent('pause', e); }, true);
   document.addEventListener('ended', function (e) { onVideoEvent('ended', e); }, true);
+  // capture:true catches Elementor/overflow containers that don't scroll the window
+  document.addEventListener('scroll', measureScroll, { passive: true, capture: true });
   window.addEventListener('scroll', measureScroll, { passive: true });
   window.addEventListener('resize', measureScroll);
   document.addEventListener('visibilitychange', function () {

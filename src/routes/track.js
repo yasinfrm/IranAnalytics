@@ -65,16 +65,68 @@ function cleanViewId(value) {
   return /^[A-Za-z0-9_-]{6,64}$/.test(id) ? id : '';
 }
 
+function headerFirst(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = headerFirst(item);
+      if (hit) return hit;
+    }
+    return '';
+  }
+  if (typeof value !== 'string') return '';
+  // X-Forwarded-For may be "client, proxy1, proxy2" — take the leftmost public-ish hop.
+  const part = value.split(',')[0].trim();
+  return part.slice(0, 64);
+}
+
 function extractIp(req) {
-  const cf = req.headers['cf-connecting-ip'];
-  const xff = req.headers['x-forwarded-for'];
-  const xri = req.headers['x-real-ip'];
-  let raw = '';
-  if (typeof cf === 'string' && cf.trim()) raw = cf.trim();
-  else if (typeof xff === 'string' && xff.trim()) raw = xff.split(',')[0].trim();
-  else if (typeof xri === 'string' && xri.trim()) raw = xri.trim();
-  else raw = String(req.ip || req.socket?.remoteAddress || '');
-  return raw.replace(/^::ffff:/i, '').slice(0, 64);
+  const h = req.headers || {};
+  const candidates = [
+    headerFirst(h['cf-connecting-ip']),
+    headerFirst(h['true-client-ip']),
+    headerFirst(h['x-real-ip']),
+    headerFirst(h['x-client-ip']),
+    headerFirst(h['x-forwarded-for']),
+    headerFirst(h['x-forwarded']),
+    headerFirst(h.forwarded)?.match(/for= "?([^;,"\s]+)"?/i)?.[1] || '',
+    Array.isArray(req.ips) && req.ips.length ? String(req.ips[0]) : '',
+    req.ip ? String(req.ip) : '',
+    req.socket?.remoteAddress ? String(req.socket.remoteAddress) : '',
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const ip = String(raw)
+      .replace(/^::ffff:/i, '')
+      .replace(/^\[|\]$/g, '')
+      .trim()
+      .slice(0, 64);
+    // Skip empty / obvious garbage; keep loopback so local tests still show something.
+    if (ip && ip !== 'unknown' && ip !== 'null' && ip !== 'undefined') return ip;
+  }
+  return '';
+}
+
+/** Fill IP on a pageview that was stored before headers were available. */
+async function backfillIp(siteId, body, req) {
+  const ip = extractIp(req);
+  if (!ip) return;
+  const vid = cleanViewId(body?.vid || body?.view_id);
+  const sid = String(body?.sid || body?.session || '').slice(0, 64);
+  if (vid) {
+    await query(
+      `UPDATE pageviews SET ip = $3
+       WHERE site_id = $1 AND view_id = $2 AND (ip = '' OR ip IS NULL)`,
+      [siteId, vid, ip]
+    );
+    return;
+  }
+  if (sid) {
+    await query(
+      `UPDATE pageviews SET ip = $3
+       WHERE site_id = $1 AND session_id = $2 AND (ip = '' OR ip IS NULL)`,
+      [siteId, sid, ip]
+    );
+  }
 }
 
 function clampMs(v) {
@@ -255,7 +307,7 @@ async function ingestPageview(body, req) {
   return { ok: true };
 }
 
-async function ingestEngage(body) {
+async function ingestEngage(body, req) {
   const key = body.k || body.key || body.site;
   const site = await resolveSite(key);
   if (!site) return { ok: false, status: 404, error: 'unknown_site' };
@@ -271,17 +323,19 @@ async function ingestEngage(body) {
   if (!Number.isFinite(scroll) || scroll < 0) scroll = 0;
   if (scroll > 100) scroll = 100;
 
+  const ip = extractIp(req);
   await query(
     `UPDATE pageviews
         SET duration_ms = CASE WHEN duration_ms > $3 THEN duration_ms ELSE $3 END,
-            scroll_depth = CASE WHEN scroll_depth > $4 THEN scroll_depth ELSE $4 END
+            scroll_depth = CASE WHEN scroll_depth > $4 THEN scroll_depth ELSE $4 END,
+            ip = CASE WHEN (ip = '' OR ip IS NULL) AND $5 <> '' THEN $5 ELSE ip END
       WHERE site_id = $1 AND view_id = $2`,
-    [site.id, vid, ms, scroll]
+    [site.id, vid, ms, scroll, ip]
   );
   return { ok: true };
 }
 
-async function ingestEvent(body) {
+async function ingestEvent(body, req) {
   const key = body.k || body.key || body.site;
   const site = await resolveSite(key);
   if (!site) return { ok: false, status: 404, error: 'unknown_site' };
@@ -312,6 +366,11 @@ async function ingestEvent(body) {
       cleanViewId(body.vid || body.view_id),
     ]
   );
+  try {
+    await backfillIp(site.id, body, req);
+  } catch {
+    /* non-fatal */
+  }
   return { ok: true };
 }
 
@@ -322,9 +381,9 @@ router.post('/collect', async (req, res) => {
     const type = body.type || (body.n || body.name || body.event ? 'event' : 'pageview');
     const result =
       type === 'event'
-        ? await ingestEvent(body)
+        ? await ingestEvent(body, req)
         : type === 'engage'
-          ? await ingestEngage(body)
+          ? await ingestEngage(body, req)
           : await ingestPageview(body, req);
     if (!result.ok) return res.status(result.status || 400).json({ error: result.error });
     res.status(204).end();
@@ -342,9 +401,9 @@ router.get('/e.gif', async (req, res) => {
   try {
     const q = req.query || {};
     if ((q.type || '') === 'event') {
-      await ingestEvent(q);
+      await ingestEvent(q, req);
     } else if ((q.type || '') === 'engage') {
-      await ingestEngage(q);
+      await ingestEngage(q, req);
     } else {
       await ingestPageview(q, req);
     }

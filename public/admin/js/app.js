@@ -876,7 +876,7 @@
     if (step.kind === 'pageview') {
       return `ورود به صفحه · ماندن ${faDuration(step.duration_ms || 0)} · اسکرول تا ${faPct(step.scroll_depth || 0)}`;
     }
-    if (step.kind === 'scroll') return `اسکرول به ${faPct(p.pct || 0)} رسید`;
+    if (step.kind === 'scroll') return `اسکرول صفحه به ${faPct(p.pct || 0)} رسید`;
     if (step.kind === 'video') {
       const act =
         p.action === 'pause' ? 'توقف ویدیو' : p.action === 'ended' ? 'پایان ویدیو' : p.action === 'click' ? 'کلیک روی ویدیو' : 'پخش ویدیو';
@@ -953,29 +953,33 @@
               </div>
               <span class="cell-sub">${escapeHtml(IAJalali.toFaDigits(ch.jalali_at || ''))}</span>
             </div>
-            ${
-              events.length
-                ? `<ul class="tl-events">${events
-                    .map((ev) => {
-                      const fakeStep = {
-                        kind: ev.name,
-                        props: ev.props,
-                        goal_name: ev.goal_name,
-                        duration_ms: 0,
-                        scroll_depth: 0,
-                      };
-                      return `<li class="tl-item kind-${escapeHtml(ev.name)}">
-                        <span class="tl-text">${escapeHtml(stepText(fakeStep))}</span>
-                        <span class="tl-offset">${
-                          ev.ms != null
-                            ? escapeHtml(formatOffset(ev.ms))
-                            : escapeHtml(IAJalali.toFaDigits((ev.jalali_at || '').slice(11) || ''))
-                        }</span>
-                      </li>`;
-                    })
-                    .join('')}</ul>`
-                : '<p class="empty" style="padding:10px 0 0">رویدادی روی این صفحه ثبت نشده (فقط بازدید).</p>'
-            }
+            <ul class="tl-events">
+              <li class="tl-item kind-pageview">
+                <span class="tl-text">ورود به صفحه · ماندن ${faDuration(ch.duration_ms || 0)} · بیشترین اسکرول ${faPct(
+                  ch.scroll_depth || 0
+                )}</span>
+                <span class="tl-offset">شروع</span>
+              </li>
+              ${events
+                .map((ev) => {
+                  const fakeStep = {
+                    kind: ev.name,
+                    props: ev.props,
+                    goal_name: ev.goal_name,
+                    duration_ms: 0,
+                    scroll_depth: 0,
+                  };
+                  return `<li class="tl-item kind-${escapeHtml(ev.name)}">
+                    <span class="tl-text">${escapeHtml(stepText(fakeStep))}</span>
+                    <span class="tl-offset">${
+                      ev.ms != null
+                        ? escapeHtml(formatOffset(ev.ms))
+                        : escapeHtml(IAJalali.toFaDigits((ev.jalali_at || '').slice(11) || ''))
+                    }</span>
+                  </li>`;
+                })
+                .join('')}
+            </ul>
           </article>`;
         })
         .join('')}</div>`;
