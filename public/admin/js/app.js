@@ -46,10 +46,12 @@
   const heatmapMeta = document.getElementById('heatmap-meta');
   const heatmapPreviewTitle = document.getElementById('heatmap-preview-title');
   const heatmapStage = document.getElementById('heatmap-stage');
-  const heatmapIframe = document.getElementById('heatmap-iframe');
   const heatmapCanvas = document.getElementById('heatmap-canvas');
   const heatmapEmpty = document.getElementById('heatmap-empty');
   const heatmapElements = document.getElementById('heatmap-elements');
+  const heatmapOpenLive = document.getElementById('heatmap-open-live');
+  const heatmapChromeUrl = document.getElementById('heatmap-chrome-url');
+  const heatmapPageSheet = document.getElementById('heatmap-page-sheet');
 
   let sites = [];
   let origin = location.origin;
@@ -958,19 +960,18 @@
 
   function sizeHeatmapStage(meta) {
     const wrap = document.getElementById('heatmap-stage-wrap');
-    const width = Math.max(320, wrap?.clientWidth || 800);
+    const stageInner = Math.max(280, (wrap?.clientWidth || 800) - 28);
     const dh = Number(meta?.max_dh) || 0;
-    const finalH =
+    const sheetH =
       dh > 200
-        ? Math.max(480, Math.min(4500, Math.round(dh * (width / 1200))))
-        : Math.max(520, Math.round(width * 1.35));
-    heatmapStage.style.height = finalH + 'px';
-    heatmapIframe.style.height = finalH + 'px';
-    heatmapCanvas.width = Math.round(width);
-    heatmapCanvas.height = finalH;
-    heatmapCanvas.style.width = width + 'px';
-    heatmapCanvas.style.height = finalH + 'px';
-    return { width: Math.round(width), height: finalH };
+        ? Math.max(420, Math.min(4200, Math.round(dh * (stageInner / 1200))))
+        : Math.max(480, Math.round(stageInner * 1.2));
+    if (heatmapPageSheet) heatmapPageSheet.style.height = sheetH + 'px';
+    heatmapCanvas.width = Math.round(stageInner);
+    heatmapCanvas.height = sheetH;
+    heatmapCanvas.style.width = stageInner + 'px';
+    heatmapCanvas.style.height = sheetH + 'px';
+    return { width: Math.round(stageInner), height: sheetH };
   }
 
   function drawClickHeat(clicks, size) {
@@ -1128,10 +1129,17 @@
         .join(' · ');
 
       const url = meta.preview_url || '';
-      if (url && heatmapIframe.getAttribute('src') !== url) {
-        heatmapIframe.src = url;
-      } else if (!url) {
-        heatmapIframe.removeAttribute('src');
+      if (heatmapChromeUrl) {
+        heatmapChromeUrl.textContent = url || meta.path || path;
+      }
+      if (heatmapOpenLive) {
+        if (url) {
+          heatmapOpenLive.href = url;
+          heatmapOpenLive.classList.remove('hidden');
+        } else {
+          heatmapOpenLive.removeAttribute('href');
+          heatmapOpenLive.classList.add('hidden');
+        }
       }
       paintHeatmap();
     } catch (err) {
