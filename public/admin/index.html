@@ -56,6 +56,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5z"/></svg>
             <span>تایم‌لاین کاربران</span>
           </button>
+          <button type="button" data-view="heatmap">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm-5 9a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5zm5 5a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm5.5-4.5a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
+            <span>نقشه حرارتی</span>
+          </button>
           <button type="button" data-view="conversions">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8V2zm1 2.07V11l4.95 4.95 1.41-1.41L15 10.17V4.07z"/></svg>
             <span>تبدیل و گزارش</span>
@@ -102,6 +106,7 @@
                 <option value="sources">خروجی منابع</option>
                 <option value="campaigns">خروجی کمپین‌ها</option>
                 <option value="visitors">خروجی کاربران</option>
+                <option value="heatmap">خروجی نقشه حرارتی</option>
                 <option value="clicks">خروجی کلیک‌ها</option>
                 <option value="conversions">خروجی تبدیل‌ها</option>
               </select>
@@ -340,6 +345,59 @@
               </div>
               <div id="visitor-timeline-root">
                 <p class="empty">یک کاربر را از لیست انتخاب کنید تا تایم‌لاین کاملش نمایش داده شود.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-heatmap" class="hidden">
+          <div class="topbar">
+            <div>
+              <h1>نقشه حرارتی</h1>
+              <p class="topbar-sub">
+                مثل Clarity: ببینید کجا بیشتر کلیک شده و تا کجای صفحه اسکرول کرده‌اند. مختصات فقط برای کلیک‌های بعد از فعال‌شدن این نسخه ثبت می‌شود.
+              </p>
+            </div>
+            <div class="topbar-actions heatmap-toolbar">
+              <select id="heatmap-page" class="chip-select" aria-label="انتخاب صفحه"></select>
+              <div class="hm-mode-toggle" role="group" aria-label="نوع نقشه">
+                <button type="button" class="hm-mode-btn is-active" data-hm-mode="click">کلیک</button>
+                <button type="button" class="hm-mode-btn" data-hm-mode="scroll">اسکرول</button>
+              </div>
+              <select id="heatmap-device" class="chip-select" aria-label="دستگاه">
+                <option value="all">همه دستگاه‌ها</option>
+                <option value="mobile">موبایل</option>
+                <option value="desktop">دسکتاپ</option>
+                <option value="tablet">تبلت</option>
+              </select>
+            </div>
+          </div>
+          <p class="form-error" id="heatmap-error"></p>
+          <div class="heatmap-layout">
+            <div class="panel heatmap-preview-panel">
+              <div class="panel-head-row">
+                <h2 id="heatmap-preview-title">پیش‌نمایش صفحه</h2>
+                <span class="panel-hint" id="heatmap-meta"></span>
+              </div>
+              <div class="heatmap-stage-wrap" id="heatmap-stage-wrap">
+                <div class="heatmap-stage" id="heatmap-stage">
+                  <iframe id="heatmap-iframe" title="پیش‌نمایش صفحه" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" loading="lazy"></iframe>
+                  <canvas id="heatmap-canvas" aria-hidden="true"></canvas>
+                </div>
+                <p class="empty heatmap-empty hidden" id="heatmap-empty">
+                  هنوز کلیک مختصات‌دار برای این صفحه نیست. بعد از به‌روزرسانی t.js چند بازدید واقعی لازم است.
+                </p>
+              </div>
+            </div>
+            <div class="panel heatmap-side-panel">
+              <div class="panel-head-row">
+                <h2>پرتکرارترین کلیک‌ها</h2>
+              </div>
+              <div id="heatmap-elements"></div>
+              <div class="hm-legend" id="heatmap-legend">
+                <span class="hm-leg cool">کم</span>
+                <span class="hm-leg-bar" aria-hidden="true"></span>
+                <span class="hm-leg hot">زیاد</span>
               </div>
             </div>
           </div>

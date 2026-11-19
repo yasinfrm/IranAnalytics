@@ -1445,6 +1445,141 @@ router.get('/stats/visitor', async (req, res) => {
   }
 });
 
+// —— Clarity-like Click & Scroll Heatmaps ——
+
+function median(nums) {
+  if (!nums.length) return null;
+  const a = [...nums].sort((x, y) => x - y);
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+
+async function computeHeatmap(req) {
+  const path = normalizePath(String(req.query.path || '').trim() || '/');
+  if (!path) return null;
+
+  const reqWithPath = { query: { ...req.query, path } };
+  const f = buildFilters(reqWithPath);
+
+  const [pvRes, clickRes, siteRes] = await Promise.all([
+    query(
+      `SELECT p.scroll_depth, p.title, p.site_id
+       FROM pageviews p
+       WHERE ${f.pvWhere}
+       LIMIT 25000`,
+      f.pvParams
+    ),
+    query(
+      `SELECT e.props
+       FROM events e
+       WHERE e.name = 'click' AND ${f.evWhere}
+       LIMIT 25000`,
+      f.evParams
+    ),
+    f.siteId && f.siteId !== 'all'
+      ? query('SELECT domain, name FROM sites WHERE id = $1 LIMIT 1', [f.siteId])
+      : query(
+          `SELECT s.domain, s.name, COUNT(*)::int AS c
+           FROM pageviews p
+           JOIN sites s ON s.id = p.site_id
+           WHERE ${f.pvWhere}
+           GROUP BY s.domain, s.name
+           ORDER BY c DESC
+           LIMIT 1`,
+          f.pvParams
+        ),
+  ]);
+
+  const views = pvRes.rows.length;
+  const title =
+    pvRes.rows.map((r) => r.title).find((t) => t && String(t).trim()) || '';
+  const domain = (siteRes.rows[0]?.domain || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+
+  const grid = new Map();
+  const elements = new Map();
+  const foldRatios = [];
+  let maxDh = 0;
+  let clicksWithCoords = 0;
+  let clickTotal = 0;
+
+  for (const row of clickRes.rows) {
+    clickTotal += 1;
+    const p = parseProps(row.props);
+    const text = String(p.text || p.name || '').trim() || '(بدون متن)';
+    const href = String(p.href || '').trim();
+    const sel = String(p.sel || '').trim();
+    const elKey = `${text}\n${href}\n${sel}`;
+    const prev = elements.get(elKey) || { text, href, sel, count: 0 };
+    prev.count += 1;
+    elements.set(elKey, prev);
+
+    const xp = Number(p.xp);
+    const yp = Number(p.yp);
+    if (!Number.isFinite(xp) || !Number.isFinite(yp)) continue;
+    clicksWithCoords += 1;
+
+    const bx = Math.max(0, Math.min(98, Math.floor(xp / 2) * 2));
+    const by = Math.max(0, Math.min(98, Math.floor(yp / 2) * 2));
+    const gKey = `${bx},${by}`;
+    const cell = grid.get(gKey) || { xp: bx + 1, yp: by + 1, w: 0 };
+    cell.w += 1;
+    grid.set(gKey, cell);
+
+    const dh = Number(p.dh);
+    const vh = Number(p.vh);
+    if (Number.isFinite(dh) && dh > maxDh) maxDh = dh;
+    if (Number.isFinite(dh) && dh > 0 && Number.isFinite(vh) && vh > 0) {
+      foldRatios.push(Math.min(100, (vh / dh) * 100));
+    }
+  }
+
+  const clicks = [...grid.values()].sort((a, b) => b.w - a.w).slice(0, 5000);
+  const topElements = [...elements.values()].sort((a, b) => b.count - a.count).slice(0, 20);
+
+  const scrollBands = [];
+  for (let depth = 10; depth <= 100; depth += 10) {
+    const reached = pvRes.rows.filter((r) => Number(r.scroll_depth) >= depth).length;
+    scrollBands.push({
+      depth,
+      pct: views ? Math.round((reached / views) * 1000) / 10 : 0,
+      count: reached,
+    });
+  }
+
+  const avgFold = median(foldRatios);
+  return {
+    days: f.range.days,
+    path,
+    meta: {
+      path,
+      title,
+      domain,
+      preview_url: domain ? `https://${domain}${path}` : '',
+      views,
+      click_count: clickTotal,
+      clicks_with_coords: clicksWithCoords,
+      max_dh: maxDh || 0,
+      avg_fold: avgFold != null ? Math.round(avgFold * 10) / 10 : 60,
+      device: f.device || 'all',
+    },
+    clicks,
+    elements: topElements,
+    scroll: scrollBands,
+  };
+}
+
+router.get('/stats/heatmap', async (req, res) => {
+  try {
+    const path = String(req.query.path || '').trim();
+    if (!path) return res.status(400).json({ error: 'path_required' });
+    const data = await computeHeatmap(req);
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
 // —— Excel-friendly CSV Export (UTF-8 BOM) ——
 
 function csvEscape(val) {
@@ -1634,6 +1769,20 @@ router.get('/export.csv', async (req, res) => {
           r.session_id,
         ])
       );
+    } else if (report === 'heatmap') {
+      const data = await computeHeatmap(req);
+      if (!data) {
+        csv = toCsv(['خطا'], [['path_required']]);
+      } else {
+        csv = toCsv(
+          ['نوع', 'مقدار1', 'مقدار2', 'وزن/درصد', 'برچسب'],
+          [
+            ...data.clicks.map((c) => ['click', c.xp, c.yp, c.w, '']),
+            ...data.scroll.map((s) => ['scroll', s.depth, '', s.pct, 'رسیده‌اند']),
+            ...data.elements.map((el) => ['element', el.href, el.sel, el.count, el.text]),
+          ]
+        );
+      }
     } else {
       const { rows } = await query(
         `SELECT p.path,

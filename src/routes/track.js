@@ -198,7 +198,17 @@ function sanitizeProps(name, raw, autoClick) {
   if (typeof props !== 'object' || props === null || Array.isArray(props)) props = {};
 
   if (name === 'click' && autoClick) {
-    return {
+    const clampPct = (v) => {
+      const n = Math.round(Number(v) * 10) / 10;
+      if (!Number.isFinite(n)) return null;
+      return Math.max(0, Math.min(100, n));
+    };
+    const clampDim = (v, max) => {
+      const n = Math.round(Number(v));
+      if (!Number.isFinite(n) || n < 0) return 0;
+      return Math.min(n, max);
+    };
+    const out = {
       el: cleanToken(props.el, 20),
       text: cleanToken(props.text, 80),
       href: cleanHref(props.href) || cleanToken(props.href, 300),
@@ -206,7 +216,16 @@ function sanitizeProps(name, raw, autoClick) {
       name: cleanToken(props.name, 80),
       outbound: props.outbound === 1 || props.outbound === '1' || props.outbound === true ? 1 : 0,
       ms: clampMs(props.ms),
+      vw: clampDim(props.vw, 10000),
+      vh: clampDim(props.vh, 10000),
+      dh: clampDim(props.dh, 200000),
+      sel: cleanToken(props.sel, 80),
     };
+    const xp = clampPct(props.xp);
+    const yp = clampPct(props.yp);
+    if (xp != null) out.xp = xp;
+    if (yp != null) out.yp = yp;
+    return out;
   }
 
   if (name === 'scroll' && autoClick) {

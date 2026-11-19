@@ -391,6 +391,47 @@
     return clip(el.innerText || el.textContent, 80);
   }
 
+  function shortSelector(el) {
+    if (!el || !el.tagName) return '';
+    var tag = (el.tagName || '').toLowerCase();
+    var id = el.id ? '#' + String(el.id).replace(/\s+/g, '') : '';
+    var cls = '';
+    try {
+      if (el.classList && el.classList.length) {
+        cls =
+          '.' +
+          Array.prototype.slice
+            .call(el.classList, 0, 2)
+            .join('.')
+            .replace(/[^\w.\-]/g, '');
+      }
+    } catch (e) {}
+    return clip(tag + id + cls, 80);
+  }
+
+  function clickGeometry(e) {
+    var doc = document.documentElement;
+    var body = document.body;
+    var se = document.scrollingElement || doc;
+    var dw = Math.max(se ? se.scrollWidth : 0, doc ? doc.scrollWidth : 0, body ? body.scrollWidth : 0, window.innerWidth || 0);
+    var dh = Math.max(se ? se.scrollHeight : 0, doc ? doc.scrollHeight : 0, body ? body.scrollHeight : 0, window.innerHeight || 0);
+    var pageX = e && typeof e.pageX === 'number' ? e.pageX : (window.scrollX || 0) + (e && e.clientX ? e.clientX : 0);
+    var pageY = e && typeof e.pageY === 'number' ? e.pageY : (window.scrollY || 0) + (e && e.clientY ? e.clientY : 0);
+    var xp = dw > 0 ? Math.round((pageX / dw) * 1000) / 10 : 0;
+    var yp = dh > 0 ? Math.round((pageY / dh) * 1000) / 10 : 0;
+    if (xp < 0) xp = 0;
+    if (xp > 100) xp = 100;
+    if (yp < 0) yp = 0;
+    if (yp > 100) yp = 100;
+    return {
+      xp: xp,
+      yp: yp,
+      vw: Math.round(window.innerWidth || 0),
+      vh: Math.round(window.innerHeight || 0),
+      dh: Math.round(dh),
+    };
+  }
+
   function detectGoal(el, hrefFull) {
     var custom = clip(el.getAttribute('data-ia-goal'), 40);
     if (custom) return custom;
@@ -602,6 +643,7 @@
 
     view.clicks += 1;
     var label = clickLabel(el);
+    var geo = clickGeometry(e);
     send(
       payload({
         type: 'event',
@@ -615,6 +657,12 @@
           name: clip(el.getAttribute('data-ia'), 80),
           outbound: outbound,
           ms: elapsedMs(),
+          xp: geo.xp,
+          yp: geo.yp,
+          vw: geo.vw,
+          vh: geo.vh,
+          dh: geo.dh,
+          sel: shortSelector(el),
         },
       })
     );

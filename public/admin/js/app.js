@@ -40,6 +40,17 @@
   const visitorsError = document.getElementById('visitors-error');
   const visitorBackBtn = document.getElementById('visitor-back-btn');
 
+  const heatmapPage = document.getElementById('heatmap-page');
+  const heatmapDevice = document.getElementById('heatmap-device');
+  const heatmapError = document.getElementById('heatmap-error');
+  const heatmapMeta = document.getElementById('heatmap-meta');
+  const heatmapPreviewTitle = document.getElementById('heatmap-preview-title');
+  const heatmapStage = document.getElementById('heatmap-stage');
+  const heatmapIframe = document.getElementById('heatmap-iframe');
+  const heatmapCanvas = document.getElementById('heatmap-canvas');
+  const heatmapEmpty = document.getElementById('heatmap-empty');
+  const heatmapElements = document.getElementById('heatmap-elements');
+
   let sites = [];
   let origin = location.origin;
   let currentView = 'dashboard';
@@ -49,6 +60,9 @@
   let visitorsCache = [];
   let visitorSearchTimer = null;
   let pendingDesired = { site: 'all', source: 'all', campaign: 'all' };
+  let heatmapPath = '';
+  let heatmapMode = 'click';
+  let heatmapCache = null;
 
   function loadSavedState() {
     let saved = {};
@@ -60,7 +74,7 @@
     try {
       if (location.hash && location.hash.length > 1) {
         const hp = new URLSearchParams(location.hash.slice(1));
-        for (const k of ['site', 'from', 'to', 'source', 'campaign', 'view', 'pagePath', 'sid', 'exportType']) {
+        for (const k of ['site', 'from', 'to', 'source', 'campaign', 'view', 'pagePath', 'sid', 'exportType', 'heatmapPath', 'heatmapMode', 'heatmapDevice']) {
           if (hp.has(k)) saved[k] = hp.get(k);
         }
       }
@@ -80,6 +94,9 @@
       view: currentView,
       pagePath: currentPagePath || '',
       sid: currentVisitorSid || '',
+      heatmapPath: heatmapPath || '',
+      heatmapMode: heatmapMode || 'click',
+      heatmapDevice: heatmapDevice ? heatmapDevice.value || 'all' : 'all',
       exportType: exportType.value || 'pages',
     };
     try {
@@ -97,6 +114,8 @@
       if (state.campaign !== 'all') hp.set('campaign', state.campaign);
       if (state.view === 'page' && state.pagePath) hp.set('pagePath', state.pagePath);
       if (state.view === 'visitors' && state.sid) hp.set('sid', state.sid);
+      if (state.view === 'heatmap' && state.heatmapPath) hp.set('heatmapPath', state.heatmapPath);
+      if (state.view === 'heatmap' && state.heatmapMode) hp.set('heatmapMode', state.heatmapMode);
       history.replaceState(null, '', '#' + hp.toString());
     } catch {
       /* ignore */
@@ -123,6 +142,9 @@
   };
   if (savedInit.pagePath) currentPagePath = savedInit.pagePath;
   if (savedInit.sid) currentVisitorSid = savedInit.sid;
+  if (savedInit.heatmapPath) heatmapPath = savedInit.heatmapPath;
+  if (savedInit.heatmapMode === 'scroll' || savedInit.heatmapMode === 'click') heatmapMode = savedInit.heatmapMode;
+  if (savedInit.heatmapDevice && heatmapDevice) heatmapDevice.value = savedInit.heatmapDevice;
   if (savedInit.exportType) exportType.value = savedInit.exportType;
 
   const picker = IAJalali.createRangePicker(
@@ -303,7 +325,7 @@
   }
 
   function setView(name, opts = {}) {
-    const valid = new Set(['dashboard', 'behavior', 'page', 'visitors', 'conversions', 'goals', 'sites']);
+    const valid = new Set(['dashboard', 'behavior', 'page', 'visitors', 'heatmap', 'conversions', 'goals', 'sites']);
     const target = valid.has(name) ? name : 'dashboard';
     if (target === 'page' && !currentPagePath) {
       return setView('dashboard', opts);
@@ -323,6 +345,7 @@
     document.getElementById('view-behavior').classList.toggle('hidden', target !== 'behavior');
     document.getElementById('view-page').classList.toggle('hidden', target !== 'page');
     document.getElementById('view-visitors').classList.toggle('hidden', target !== 'visitors');
+    document.getElementById('view-heatmap').classList.toggle('hidden', target !== 'heatmap');
     document.getElementById('view-conversions').classList.toggle('hidden', target !== 'conversions');
     document.getElementById('view-goals').classList.toggle('hidden', target !== 'goals');
     document.getElementById('view-sites').classList.toggle('hidden', target !== 'sites');
@@ -330,11 +353,16 @@
     if (!opts.keepExport) {
       if (target === 'behavior') exportType.value = 'sources';
       else if (target === 'visitors') exportType.value = 'visitors';
+      else if (target === 'heatmap') exportType.value = 'heatmap';
       else if (target === 'conversions') exportType.value = 'conversions';
       else if (target === 'dashboard') exportType.value = 'pages';
     }
 
     if (target !== 'visitors' && visitorsLayout) visitorsLayout.classList.remove('has-detail');
+
+    document.querySelectorAll('[data-hm-mode]').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.hmMode === heatmapMode);
+    });
 
     saveState();
     reloadCurrentView();
@@ -348,6 +376,7 @@
       else if (currentView === 'behavior') await loadBehavior();
       else if (currentView === 'page') await loadPageDetail(currentPagePath);
       else if (currentView === 'visitors') await loadVisitors();
+      else if (currentView === 'heatmap') await loadHeatmap();
       else if (currentView === 'conversions') await loadConversions();
       else if (currentView === 'goals') await loadGoals();
       else if (currentView === 'sites') renderSites();
@@ -400,6 +429,36 @@
     });
   }
 
+  if (heatmapPage) {
+    heatmapPage.addEventListener('change', () => {
+      heatmapPath = heatmapPage.value || '/';
+      saveState();
+      if (currentView === 'heatmap') loadHeatmap();
+    });
+  }
+  if (heatmapDevice) {
+    heatmapDevice.addEventListener('change', () => {
+      saveState();
+      if (currentView === 'heatmap') loadHeatmap();
+    });
+  }
+  document.querySelectorAll('[data-hm-mode]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      heatmapMode = btn.dataset.hmMode === 'scroll' ? 'scroll' : 'click';
+      document.querySelectorAll('[data-hm-mode]').forEach((b) => {
+        b.classList.toggle('is-active', b.dataset.hmMode === heatmapMode);
+      });
+      saveState();
+      paintHeatmap();
+    });
+  });
+  let heatmapResizeTimer = null;
+  window.addEventListener('resize', () => {
+    if (currentView !== 'heatmap' || !heatmapCache) return;
+    clearTimeout(heatmapResizeTimer);
+    heatmapResizeTimer = setTimeout(paintHeatmap, 180);
+  });
+
   fSite.addEventListener('change', () => {
     pendingDesired.site = fSite.value;
     saveState();
@@ -430,10 +489,11 @@
     const rep = currentView === 'page' && currentPagePath ? 'page_detail' : exportType.value || 'pages';
     location.href = `/api/export.csv?${filterQuery({
       report: rep,
-      path: rep === 'page_detail' ? currentPagePath : '',
+      path: rep === 'page_detail' ? currentPagePath : rep === 'heatmap' ? heatmapPath || heatmapPage?.value || '' : '',
       sid: rep === 'visitor' ? currentVisitorSid : '',
       q: rep === 'visitors' ? visitorSearch.value || '' : '',
       only_converted: rep === 'visitors' && visitorOnlyConv.checked ? '1' : '',
+      device: rep === 'heatmap' && heatmapDevice ? heatmapDevice.value || '' : '',
     })}`;
   }
   exportBtn.addEventListener('click', downloadExport);
@@ -869,6 +929,214 @@
     const m = Math.floor(s / 60);
     const r = s % 60;
     return r ? faNum(m) + ':' + String(r).padStart(2, '0') : faNum(m) + ' دقیقه';
+  }
+
+  function heatColor(t) {
+    // cool sea → brass → danger (Clarity-like warm map, brand-aligned)
+    const stops = [
+      [0, [47, 108, 146]],
+      [0.35, [11, 105, 104]],
+      [0.65, [195, 154, 95]],
+      [1, [163, 59, 45]],
+    ];
+    let a = stops[0];
+    let b = stops[stops.length - 1];
+    for (let i = 0; i < stops.length - 1; i++) {
+      if (t >= stops[i][0] && t <= stops[i + 1][0]) {
+        a = stops[i];
+        b = stops[i + 1];
+        break;
+      }
+    }
+    const span = b[0] - a[0] || 1;
+    const u = (t - a[0]) / span;
+    const r = Math.round(a[1][0] + (b[1][0] - a[1][0]) * u);
+    const g = Math.round(a[1][1] + (b[1][1] - a[1][1]) * u);
+    const bl = Math.round(a[1][2] + (b[1][2] - a[1][2]) * u);
+    return [r, g, bl];
+  }
+
+  function sizeHeatmapStage(meta) {
+    const wrap = document.getElementById('heatmap-stage-wrap');
+    const width = Math.max(320, wrap?.clientWidth || 800);
+    const dh = Number(meta?.max_dh) || 0;
+    const finalH =
+      dh > 200
+        ? Math.max(480, Math.min(4500, Math.round(dh * (width / 1200))))
+        : Math.max(520, Math.round(width * 1.35));
+    heatmapStage.style.height = finalH + 'px';
+    heatmapIframe.style.height = finalH + 'px';
+    heatmapCanvas.width = Math.round(width);
+    heatmapCanvas.height = finalH;
+    heatmapCanvas.style.width = width + 'px';
+    heatmapCanvas.style.height = finalH + 'px';
+    return { width: Math.round(width), height: finalH };
+  }
+
+  function drawClickHeat(clicks, size) {
+    const ctx = heatmapCanvas.getContext('2d');
+    ctx.clearRect(0, 0, size.width, size.height);
+    if (!clicks.length) return;
+
+    const maxW = Math.max(...clicks.map((c) => c.w), 1);
+    const radius = Math.max(18, Math.round(size.width * 0.035));
+    const acc = document.createElement('canvas');
+    acc.width = size.width;
+    acc.height = size.height;
+    const actx = acc.getContext('2d');
+
+    for (const c of clicks) {
+      const x = (Number(c.xp) / 100) * size.width;
+      const y = (Number(c.yp) / 100) * size.height;
+      const intensity = 0.25 + 0.75 * (c.w / maxW);
+      const g = actx.createRadialGradient(x, y, 0, x, y, radius);
+      g.addColorStop(0, `rgba(0,0,0,${0.55 * intensity})`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      actx.fillStyle = g;
+      actx.beginPath();
+      actx.arc(x, y, radius, 0, Math.PI * 2);
+      actx.fill();
+    }
+
+    const img = actx.getImageData(0, 0, size.width, size.height);
+    const out = ctx.createImageData(size.width, size.height);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const alpha = img.data[i + 3] / 255;
+      if (alpha < 0.02) continue;
+      const [r, g, b] = heatColor(Math.min(1, alpha * 1.35));
+      out.data[i] = r;
+      out.data[i + 1] = g;
+      out.data[i + 2] = b;
+      out.data[i + 3] = Math.round(Math.min(210, alpha * 255));
+    }
+    ctx.putImageData(out, 0, 0);
+  }
+
+  function drawScrollHeat(bands, avgFold, size) {
+    const ctx = heatmapCanvas.getContext('2d');
+    ctx.clearRect(0, 0, size.width, size.height);
+    if (!bands.length) return;
+    const bandH = size.height / bands.length;
+    for (let i = 0; i < bands.length; i++) {
+      const pct = Number(bands[i].pct) || 0;
+      const t = Math.min(1, pct / 100);
+      const [r, g, b] = heatColor(t);
+      ctx.fillStyle = `rgba(${r},${g},${b},${0.18 + t * 0.45})`;
+      ctx.fillRect(0, i * bandH, size.width, bandH + 1);
+      ctx.fillStyle = 'rgba(22,38,36,0.55)';
+      ctx.font = '12px Vazirmatn UI FD, Tahoma, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(faPct(pct) + ' · عمق ' + faNum(bands[i].depth), 10, i * bandH + 16);
+    }
+    const foldY = ((Number(avgFold) || 60) / 100) * size.height;
+    ctx.strokeStyle = 'rgba(163, 59, 45, 0.85)';
+    ctx.setLineDash([6, 5]);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, foldY);
+    ctx.lineTo(size.width, foldY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(163, 59, 45, 0.95)';
+    ctx.font = '600 12px Vazirmatn UI FD, Tahoma, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('خط دید اولیه ≈ ' + faPct(avgFold || 60), size.width - 12, Math.max(16, foldY - 6));
+  }
+
+  function renderHeatmapElements(list, mode) {
+    if (mode === 'scroll') {
+      heatmapElements.innerHTML = `<p class="hm-scroll-note">نوارهای رنگی نشان می‌دهند چند درصد بازدیدکنندگان تا آن عمق صفحه رسیده‌اند. خط‌چین قرمز تقریب «بالای صفحه» (fold) است.</p>`;
+      return;
+    }
+    if (!list.length) {
+      heatmapElements.innerHTML = '<p class="empty">کلیکی در این بازه ثبت نشده.</p>';
+      return;
+    }
+    heatmapElements.innerHTML = `<div class="hm-el-list">${list
+      .map(
+        (el) => `<div class="hm-el-row">
+          <span class="hm-el-count">${faNum(el.count)}</span>
+          <strong>${escapeHtml(el.text || '(بدون متن)')}</strong>
+          ${el.href ? `<span class="cell-sub" dir="ltr">${escapeHtml(el.href)}</span>` : ''}
+          ${el.sel ? `<span class="cell-sub" dir="ltr">${escapeHtml(el.sel)}</span>` : ''}
+        </div>`
+      )
+      .join('')}</div>`;
+  }
+
+  function paintHeatmap() {
+    if (!heatmapCache) return;
+    const meta = heatmapCache.meta || {};
+    const size = sizeHeatmapStage(meta);
+    if (heatmapMode === 'scroll') {
+      drawScrollHeat(heatmapCache.scroll || [], meta.avg_fold, size);
+      heatmapEmpty.classList.add('hidden');
+    } else {
+      const clicks = heatmapCache.clicks || [];
+      drawClickHeat(clicks, size);
+      heatmapEmpty.classList.toggle('hidden', clicks.length > 0 || !(meta.views > 0));
+    }
+    renderHeatmapElements(heatmapCache.elements || [], heatmapMode);
+  }
+
+  async function fillHeatmapPages() {
+    if (!heatmapPage) return;
+    try {
+      const data = await api(`/api/stats/pages?${filterQuery({ limit: 80 })}`);
+      const pages = data.pages || [];
+      const prev = heatmapPath || heatmapPage.value;
+      heatmapPage.innerHTML = pages.length
+        ? pages
+            .map((p) => {
+              const label = pageLabel(p);
+              return `<option value="${escapeHtml(p.path)}">${escapeHtml(label.main)} (${faNum(p.views || p.pageviews || 0)})</option>`;
+            })
+            .join('')
+        : '<option value="/">/</option>';
+      if (prev && [...heatmapPage.options].some((o) => o.value === prev)) heatmapPage.value = prev;
+      else if (pages[0]) heatmapPage.value = pages[0].path;
+      heatmapPath = heatmapPage.value || '/';
+    } catch {
+      if (!heatmapPage.options.length) heatmapPage.innerHTML = '<option value="/">/</option>';
+      heatmapPath = heatmapPage.value || '/';
+    }
+  }
+
+  async function loadHeatmap() {
+    if (!heatmapPage) return;
+    heatmapError.textContent = '';
+    await fillHeatmapPages();
+    const path = heatmapPage.value || heatmapPath || '/';
+    heatmapPath = path;
+    saveState();
+    try {
+      const data = await api(
+        `/api/stats/heatmap?${filterQuery({
+          path,
+          device: heatmapDevice?.value || 'all',
+        })}`
+      );
+      heatmapCache = data;
+      const meta = data.meta || {};
+      heatmapPreviewTitle.textContent = meta.title ? pageLabel({ path: meta.path, title: meta.title }).main : 'پیش‌نمایش صفحه';
+      heatmapMeta.textContent = [
+        faNum(meta.views || 0) + ' بازدید',
+        faNum(meta.click_count || 0) + ' کلیک',
+        meta.clicks_with_coords != null ? faNum(meta.clicks_with_coords) + ' با مختصات' : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+      const url = meta.preview_url || '';
+      if (url && heatmapIframe.getAttribute('src') !== url) {
+        heatmapIframe.src = url;
+      } else if (!url) {
+        heatmapIframe.removeAttribute('src');
+      }
+      paintHeatmap();
+    } catch (err) {
+      if (!err || err.message !== 'unauthorized') heatmapError.textContent = 'بارگذاری نقشه حرارتی ناموفق بود.';
+    }
   }
 
   function stepText(step) {
