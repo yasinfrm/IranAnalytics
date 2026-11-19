@@ -381,11 +381,13 @@
     }
   }
 
-  function flush() {
+  function flush(force) {
     if (!view) return;
     tick();
     if (view.acc === view.sentMs && view.scroll === view.sentScroll) return;
-    if (view.acc < 400 && view.scroll <= 0) return;
+    // Periodic flush ignores tiny glances; unload/hide should still store real dwell.
+    var minMs = force ? 50 : 400;
+    if (view.acc < minMs && view.scroll <= 0) return;
     view.sentMs = view.acc;
     view.sentScroll = view.scroll;
     send(
@@ -832,12 +834,14 @@
     if (document.hidden) {
       tick();
       view.lastTick = 0;
-      flush();
+      flush(true);
     } else {
       view.lastTick = Date.now();
     }
   });
-  window.addEventListener('pagehide', flush);
+  window.addEventListener('pagehide', function () {
+    flush(true);
+  });
 
   setInterval(function () {
     if (document.hidden) return;
