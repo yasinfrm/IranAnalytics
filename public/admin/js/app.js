@@ -54,6 +54,8 @@
   const heatmapPageSheet = document.getElementById('heatmap-page-sheet');
   const heatmapIframe = document.getElementById('heatmap-iframe');
   const heatmapFallbackSheet = document.getElementById('heatmap-fallback-sheet');
+  const heatmapScaleOuter = document.getElementById('heatmap-scale-outer');
+  const heatmapScaleInner = document.getElementById('heatmap-scale-inner');
 
   let sites = [];
   let origin = location.origin;
@@ -962,25 +964,51 @@
     return [r, g, bl];
   }
 
+  function heatmapRenderWidth(meta) {
+    const w = Number(meta?.render_width);
+    if (Number.isFinite(w) && w >= 320) return Math.round(Math.min(1600, w));
+    const device = heatmapDevice?.value || meta?.device || 'all';
+    if (device === 'mobile') return 390;
+    if (device === 'tablet') return 768;
+    return 1280;
+  }
+
   function sizeHeatmapStage(meta) {
     const wrap = document.getElementById('heatmap-stage-wrap');
-    const stageInner = Math.max(280, (wrap?.clientWidth || 800) - 28);
+    const panelW = Math.max(280, (wrap?.clientWidth || 800) - 28);
+    const renderW = heatmapRenderWidth(meta);
     const dh = Number(meta?.max_dh) || 0;
     let sheetH;
     if (heatmapLiveHeight > 200) {
       sheetH = Math.max(420, Math.min(6000, Math.round(heatmapLiveHeight)));
     } else if (dh > 200) {
-      sheetH = Math.max(420, Math.min(4500, Math.round(dh * (stageInner / 1200))));
+      sheetH = Math.max(420, Math.min(4500, Math.round(dh)));
     } else {
-      sheetH = Math.max(480, Math.round(stageInner * 1.2));
+      sheetH = Math.max(480, Math.round(renderW * 1.15));
     }
-    if (heatmapPageSheet) heatmapPageSheet.style.height = sheetH + 'px';
-    if (heatmapIframe) heatmapIframe.style.height = sheetH + 'px';
-    heatmapCanvas.width = Math.round(stageInner);
+
+    const scale = Math.min(1, panelW / renderW);
+    if (heatmapScaleInner) {
+      heatmapScaleInner.style.width = renderW + 'px';
+      heatmapScaleInner.style.transform = `scale(${scale})`;
+    }
+    if (heatmapScaleOuter) {
+      // Reserve visual space after CSS scale (layout size stays pre-transform)
+      heatmapScaleOuter.style.height = Math.round((sheetH + 40) * scale) + 'px';
+    }
+    if (heatmapPageSheet) {
+      heatmapPageSheet.style.width = renderW + 'px';
+      heatmapPageSheet.style.height = sheetH + 'px';
+    }
+    if (heatmapIframe) {
+      heatmapIframe.style.width = renderW + 'px';
+      heatmapIframe.style.height = sheetH + 'px';
+    }
+    heatmapCanvas.width = renderW;
     heatmapCanvas.height = sheetH;
-    heatmapCanvas.style.width = stageInner + 'px';
+    heatmapCanvas.style.width = renderW + 'px';
     heatmapCanvas.style.height = sheetH + 'px';
-    return { width: Math.round(stageInner), height: sheetH };
+    return { width: renderW, height: sheetH, scale, panelW };
   }
 
   function setHeatmapLive(on) {
@@ -988,16 +1016,16 @@
     if (heatmapFallbackSheet) heatmapFallbackSheet.style.opacity = on ? '0' : '0.7';
   }
 
-  function loadHeatmapPreviewFrame(path) {
+  function loadHeatmapPreviewFrame(path, renderW) {
     if (!heatmapIframe) return;
-    const src = `/api/heatmap-preview?${filterQuery({ path })}`;
+    const vw = renderW || 1280;
+    const src = `/api/heatmap-preview?${filterQuery({ path, vw })}`;
     if (heatmapPreviewSrc === src) return;
     heatmapPreviewSrc = src;
     heatmapLiveHeight = 0;
     setHeatmapLive(false);
     heatmapIframe.onload = () => {
       setHeatmapLive(true);
-      // height comes via postMessage; paint once as fallback
       setTimeout(() => paintHeatmap(), 400);
     };
     heatmapIframe.onerror = () => {
@@ -1153,10 +1181,12 @@
       heatmapCache = data;
       const meta = data.meta || {};
       heatmapPreviewTitle.textContent = meta.title ? pageLabel({ path: meta.path, title: meta.title }).main : 'پیش‌نمایش صفحه';
+      const renderW = heatmapRenderWidth(meta);
       heatmapMeta.textContent = [
         faNum(meta.views || 0) + ' بازدید',
         faNum(meta.click_count || 0) + ' کلیک',
         meta.clicks_with_coords != null ? faNum(meta.clicks_with_coords) + ' با مختصات' : '',
+        'عرض ' + faNum(renderW) + 'px',
       ]
         .filter(Boolean)
         .join(' · ');
@@ -1174,7 +1204,7 @@
           heatmapOpenLive.classList.add('hidden');
         }
       }
-      if (meta.domain) loadHeatmapPreviewFrame(path);
+      if (meta.domain) loadHeatmapPreviewFrame(path, renderW);
       else {
         if (heatmapIframe) heatmapIframe.removeAttribute('src');
         heatmapPreviewSrc = '';

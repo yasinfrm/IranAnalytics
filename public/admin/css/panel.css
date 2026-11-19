@@ -1168,6 +1168,16 @@ a {
   padding: 14px 14px 18px;
 }
 
+.hm-scale-outer {
+  width: 100%;
+  overflow: hidden;
+}
+
+.hm-scale-inner {
+  transform-origin: top center;
+  will-change: transform;
+}
+
 .hm-page-chrome {
   display: flex;
   align-items: center;
@@ -1241,14 +1251,11 @@ a {
   transition: opacity 0.25s ease;
 }
 
-.heatmap-stage canvas {
+.hm-page-sheet canvas {
   position: absolute;
-  left: 14px;
-  right: 14px;
-  top: 46px;
-  bottom: 18px;
-  width: auto;
-  height: auto;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
   mix-blend-mode: multiply;
   border-radius: 0 0 10px 10px;

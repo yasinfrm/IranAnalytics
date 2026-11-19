@@ -1498,6 +1498,7 @@ async function computeHeatmap(req) {
   const grid = new Map();
   const elements = new Map();
   const foldRatios = [];
+  const viewWidths = [];
   let maxDh = 0;
   let clicksWithCoords = 0;
   let clickTotal = 0;
@@ -1527,7 +1528,9 @@ async function computeHeatmap(req) {
 
     const dh = Number(p.dh);
     const vh = Number(p.vh);
+    const vw = Number(p.vw);
     if (Number.isFinite(dh) && dh > maxDh) maxDh = dh;
+    if (Number.isFinite(vw) && vw >= 280 && vw <= 3000) viewWidths.push(vw);
     if (Number.isFinite(dh) && dh > 0 && Number.isFinite(vh) && vh > 0) {
       foldRatios.push(Math.min(100, (vh / dh) * 100));
     }
@@ -1547,6 +1550,11 @@ async function computeHeatmap(req) {
   }
 
   const avgFold = median(foldRatios);
+  const deviceDefault =
+    f.device === 'mobile' ? 390 : f.device === 'tablet' ? 768 : 1280;
+  const medVw = median(viewWidths);
+  const renderWidth = Math.round(Math.max(320, Math.min(1600, medVw || deviceDefault)));
+
   return {
     days: f.range.days,
     path,
@@ -1561,6 +1569,8 @@ async function computeHeatmap(req) {
       max_dh: maxDh || 0,
       avg_fold: avgFold != null ? Math.round(avgFold * 10) / 10 : 60,
       device: f.device || 'all',
+      // Preview must match click viewport width or responsive layout shifts heat dots.
+      render_width: renderWidth,
     },
     clicks,
     elements: topElements,
@@ -1608,18 +1618,21 @@ function isBlockedPreviewHost(hostname) {
   return false;
 }
 
-function sanitizePreviewHtml(html, baseHref) {
+function sanitizePreviewHtml(html, baseHref, renderWidth) {
   let out = String(html || '');
+  const vw = Math.round(Math.max(320, Math.min(1600, Number(renderWidth) || 1280)));
   // Drop framing locks so the document can render inside our admin iframe.
   out = out.replace(/<meta[^>]+http-equiv=["']?content-security-policy["']?[^>]*>/gi, (tag) =>
     /frame-ancestors/i.test(tag) ? '' : tag
   );
   out = out.replace(/<meta[^>]+http-equiv=["']?x-frame-options["']?[^>]*>/gi, '');
+  out = out.replace(/<meta[^>]+name=["']?viewport["']?[^>]*>/gi, '');
   // Prefer a single base so CSS/JS/images resolve against the live site.
   out = out.replace(/<base\b[^>]*>/gi, '');
-  const inject = `<base href="${baseHref.replace(/"/g, '&quot;')}">
-<style id="ia-hm-preview">html,body{scroll-behavior:auto!important} a,button{cursor:default!important}</style>
-<script id="ia-hm-height">(function(){function s(){try{var h=Math.max(document.documentElement.scrollHeight||0,document.body&&document.body.scrollHeight||0,800);parent.postMessage({source:'ia-heatmap',height:h},'*');}catch(e){}}window.addEventListener('load',s);setInterval(s,1500);s();})();</script>`;
+  const inject = `<meta name="viewport" content="width=${vw}">
+<base href="${baseHref.replace(/"/g, '&quot;')}">
+<style id="ia-hm-preview">html,body{scroll-behavior:auto!important;max-width:100%!important} a,button{cursor:default!important}</style>
+<script id="ia-hm-height">(function(){function s(){try{var h=Math.max(document.documentElement.scrollHeight||0,document.body&&document.body.scrollHeight||0,800);parent.postMessage({source:'ia-heatmap',height:h,width:${vw}},'*');}catch(e){}}window.addEventListener('load',s);setInterval(s,1500);s();})();</script>`;
   if (/<head[\s>]/i.test(out)) {
     out = out.replace(/<head([^>]*)>/i, `<head$1>${inject}`);
   } else {
@@ -1708,7 +1721,10 @@ router.get('/heatmap-preview', async (req, res) => {
       /* keep domain root */
     }
 
-    const html = sanitizePreviewHtml(raw, baseHref);
+    const renderWidth = Math.round(
+      Math.max(320, Math.min(1600, Number(req.query.vw) || Number(req.query.render_width) || 1280))
+    );
+    const html = sanitizePreviewHtml(raw, baseHref, renderWidth);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'private, max-age=60');
     res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
