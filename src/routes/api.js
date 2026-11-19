@@ -1580,6 +1580,147 @@ router.get('/stats/heatmap', async (req, res) => {
   }
 });
 
+/** Registered site hostnames only — prevents SSRF via heatmap preview proxy. */
+async function allowedSiteHosts() {
+  const { rows } = await query(`SELECT domain FROM sites WHERE is_active = TRUE AND domain <> ''`);
+  const hosts = new Set();
+  for (const row of rows) {
+    const host = String(row.domain || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/\/.*$/, '')
+      .replace(/^www\./, '');
+    if (host) {
+      hosts.add(host);
+      hosts.add('www.' + host);
+    }
+  }
+  return hosts;
+}
+
+function isBlockedPreviewHost(hostname) {
+  const h = String(hostname || '').toLowerCase();
+  if (!h) return true;
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true;
+  if (h === '0.0.0.0' || h === '::1') return true;
+  if (/^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(h)) return true;
+  return false;
+}
+
+function sanitizePreviewHtml(html, baseHref) {
+  let out = String(html || '');
+  // Drop framing locks so the document can render inside our admin iframe.
+  out = out.replace(/<meta[^>]+http-equiv=["']?content-security-policy["']?[^>]*>/gi, (tag) =>
+    /frame-ancestors/i.test(tag) ? '' : tag
+  );
+  out = out.replace(/<meta[^>]+http-equiv=["']?x-frame-options["']?[^>]*>/gi, '');
+  // Prefer a single base so CSS/JS/images resolve against the live site.
+  out = out.replace(/<base\b[^>]*>/gi, '');
+  const inject = `<base href="${baseHref.replace(/"/g, '&quot;')}">
+<style id="ia-hm-preview">html,body{scroll-behavior:auto!important} a,button{cursor:default!important}</style>
+<script id="ia-hm-height">(function(){function s(){try{var h=Math.max(document.documentElement.scrollHeight||0,document.body&&document.body.scrollHeight||0,800);parent.postMessage({source:'ia-heatmap',height:h},'*');}catch(e){}}window.addEventListener('load',s);setInterval(s,1500);s();})();</script>`;
+  if (/<head[\s>]/i.test(out)) {
+    out = out.replace(/<head([^>]*)>/i, `<head$1>${inject}`);
+  } else {
+    out = inject + out;
+  }
+  return out;
+}
+
+router.get('/heatmap-preview', async (req, res) => {
+  try {
+    const path = normalizePath(String(req.query.path || '/').trim() || '/');
+    const siteId = String(req.query.site || 'all').trim();
+    let domain = '';
+
+    if (siteId && siteId !== 'all') {
+      const { rows } = await query('SELECT domain FROM sites WHERE id = $1 LIMIT 1', [siteId]);
+      domain = String(rows[0]?.domain || '')
+        .trim()
+        .replace(/^https?:\/\//, '')
+        .replace(/\/.*$/, '');
+    }
+    if (!domain) {
+      const f = buildFilters({ query: { ...req.query, path } });
+      const { rows } = await query(
+        `SELECT s.domain, COUNT(*)::int AS c
+         FROM pageviews p
+         JOIN sites s ON s.id = p.site_id
+         WHERE ${f.pvWhere} AND s.domain <> ''
+         GROUP BY s.domain
+         ORDER BY c DESC
+         LIMIT 1`,
+        f.pvParams
+      );
+      domain = String(rows[0]?.domain || '')
+        .trim()
+        .replace(/^https?:\/\//, '')
+        .replace(/\/.*$/, '');
+    }
+    if (!domain) return res.status(404).send('domain_not_found');
+
+    const allowed = await allowedSiteHosts();
+    const hostNoWww = domain.toLowerCase().replace(/^www\./, '');
+    if (isBlockedPreviewHost(hostNoWww) || (!allowed.has(hostNoWww) && !allowed.has('www.' + hostNoWww) && !allowed.has(domain.toLowerCase()))) {
+      return res.status(403).send('domain_not_allowed');
+    }
+
+    const target = new URL(path || '/', `https://${domain}`);
+    if (isBlockedPreviewHost(target.hostname)) return res.status(403).send('host_blocked');
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    let upstream;
+    try {
+      upstream = await fetch(target.toString(), {
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (compatible; IranAnalyticsHeatmap/1.0; +https://stats.homamigration.net)',
+          Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8',
+        },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!upstream.ok) {
+      return res.status(502).send(`upstream_${upstream.status}`);
+    }
+    const ctype = String(upstream.headers.get('content-type') || '');
+    if (!/text\/html|application\/xhtml/i.test(ctype) && ctype) {
+      return res.status(415).send('not_html');
+    }
+
+    const raw = await upstream.text();
+    if (raw.length > 2_500_000) return res.status(413).send('too_large');
+
+    const finalUrl = upstream.url || target.toString();
+    let baseHref = `https://${domain}/`;
+    try {
+      const u = new URL(finalUrl);
+      const dir = u.pathname.endsWith('/') ? u.pathname : u.pathname.replace(/\/[^/]*$/, '/') || '/';
+      baseHref = u.origin + dir;
+    } catch {
+      /* keep domain root */
+    }
+
+    const html = sanitizePreviewHtml(raw, baseHref);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.removeHeader('X-Frame-Options');
+    res.send(html);
+  } catch (err) {
+    console.error('heatmap-preview', err);
+    res.status(502).send('preview_failed');
+  }
+});
+
 // —— Excel-friendly CSV Export (UTF-8 BOM) ——
 
 function csvEscape(val) {

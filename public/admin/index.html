@@ -380,7 +380,7 @@
                 <span class="panel-hint" id="heatmap-meta"></span>
               </div>
               <p class="hm-preview-note">
-                پیش‌نمایش زنده به‌خاطر CSP سایت (frame-ancestors) داخل پنل باز نمی‌شود؛ نقشه روی شِمای صفحه رسم می‌شود.
+                پیش‌نمایش از طریق پروکسی امن پنل لود می‌شود تا نقشه حرارت روی خود صفحه دیده شود.
                 <a id="heatmap-open-live" href="#" target="_blank" rel="noopener noreferrer" class="hidden">باز کردن صفحه واقعی ↗</a>
               </p>
               <div class="heatmap-stage-wrap" id="heatmap-stage-wrap">
@@ -390,7 +390,13 @@
                     <div class="hm-chrome-url" id="heatmap-chrome-url" dir="ltr">/</div>
                   </div>
                   <div class="hm-page-sheet" id="heatmap-page-sheet">
-                    <div class="hm-sheet-lines" aria-hidden="true"></div>
+                    <div class="hm-sheet-lines" id="heatmap-fallback-sheet" aria-hidden="true"></div>
+                    <iframe
+                      id="heatmap-iframe"
+                      title="پیش‌نمایش زنده صفحه"
+                      sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                      referrerpolicy="no-referrer"
+                    ></iframe>
                   </div>
                   <canvas id="heatmap-canvas" aria-hidden="true"></canvas>
                 </div>

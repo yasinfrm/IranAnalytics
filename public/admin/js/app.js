@@ -52,6 +52,8 @@
   const heatmapOpenLive = document.getElementById('heatmap-open-live');
   const heatmapChromeUrl = document.getElementById('heatmap-chrome-url');
   const heatmapPageSheet = document.getElementById('heatmap-page-sheet');
+  const heatmapIframe = document.getElementById('heatmap-iframe');
+  const heatmapFallbackSheet = document.getElementById('heatmap-fallback-sheet');
 
   let sites = [];
   let origin = location.origin;
@@ -65,6 +67,8 @@
   let heatmapPath = '';
   let heatmapMode = 'click';
   let heatmapCache = null;
+  let heatmapLiveHeight = 0;
+  let heatmapPreviewSrc = '';
 
   function loadSavedState() {
     let saved = {};
@@ -962,16 +966,45 @@
     const wrap = document.getElementById('heatmap-stage-wrap');
     const stageInner = Math.max(280, (wrap?.clientWidth || 800) - 28);
     const dh = Number(meta?.max_dh) || 0;
-    const sheetH =
-      dh > 200
-        ? Math.max(420, Math.min(4200, Math.round(dh * (stageInner / 1200))))
-        : Math.max(480, Math.round(stageInner * 1.2));
+    let sheetH;
+    if (heatmapLiveHeight > 200) {
+      sheetH = Math.max(420, Math.min(6000, Math.round(heatmapLiveHeight)));
+    } else if (dh > 200) {
+      sheetH = Math.max(420, Math.min(4500, Math.round(dh * (stageInner / 1200))));
+    } else {
+      sheetH = Math.max(480, Math.round(stageInner * 1.2));
+    }
     if (heatmapPageSheet) heatmapPageSheet.style.height = sheetH + 'px';
+    if (heatmapIframe) heatmapIframe.style.height = sheetH + 'px';
     heatmapCanvas.width = Math.round(stageInner);
     heatmapCanvas.height = sheetH;
     heatmapCanvas.style.width = stageInner + 'px';
     heatmapCanvas.style.height = sheetH + 'px';
     return { width: Math.round(stageInner), height: sheetH };
+  }
+
+  function setHeatmapLive(on) {
+    if (heatmapPageSheet) heatmapPageSheet.classList.toggle('is-live', !!on);
+    if (heatmapFallbackSheet) heatmapFallbackSheet.style.opacity = on ? '0' : '0.7';
+  }
+
+  function loadHeatmapPreviewFrame(path) {
+    if (!heatmapIframe) return;
+    const src = `/api/heatmap-preview?${filterQuery({ path })}`;
+    if (heatmapPreviewSrc === src) return;
+    heatmapPreviewSrc = src;
+    heatmapLiveHeight = 0;
+    setHeatmapLive(false);
+    heatmapIframe.onload = () => {
+      setHeatmapLive(true);
+      // height comes via postMessage; paint once as fallback
+      setTimeout(() => paintHeatmap(), 400);
+    };
+    heatmapIframe.onerror = () => {
+      setHeatmapLive(false);
+      heatmapPreviewSrc = '';
+    };
+    heatmapIframe.src = src;
   }
 
   function drawClickHeat(clicks, size) {
@@ -1141,11 +1174,28 @@
           heatmapOpenLive.classList.add('hidden');
         }
       }
+      if (meta.domain) loadHeatmapPreviewFrame(path);
+      else {
+        if (heatmapIframe) heatmapIframe.removeAttribute('src');
+        heatmapPreviewSrc = '';
+        setHeatmapLive(false);
+      }
       paintHeatmap();
     } catch (err) {
       if (!err || err.message !== 'unauthorized') heatmapError.textContent = 'بارگذاری نقشه حرارتی ناموفق بود.';
     }
   }
+
+  window.addEventListener('message', (ev) => {
+    const data = ev.data;
+    if (!data || data.source !== 'ia-heatmap') return;
+    const h = Number(data.height);
+    if (!Number.isFinite(h) || h < 200) return;
+    if (Math.abs(h - heatmapLiveHeight) < 24) return;
+    heatmapLiveHeight = h;
+    setHeatmapLive(true);
+    if (currentView === 'heatmap' && heatmapCache) paintHeatmap();
+  });
 
   function stepText(step) {
     const p = step.props || {};
